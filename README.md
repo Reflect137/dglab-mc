@@ -9,24 +9,29 @@
 打开 Termux，粘这一行：
 
 ```bash
-pkg update -y && pkg install -y curl && bash <(curl -fsSL https://cdn.jsdelivr.net/gh/Reflect137/dglab-mc@main/install.sh)
-```
-
-这条走的是 jsDelivr 镜像（`raw.githubusercontent.com` 在国内经常连不上）。拉不动就换下面 git 那条：
-
-```bash
 pkg update -y && pkg install -y git nodejs && git clone --depth 1 https://github.com/Reflect137/dglab-mc ~/dglab-mc && bash ~/dglab-mc/install.sh
 ```
 
-不想用命令行的，直接下 [整个项目 ZIP](https://github.com/Reflect137/dglab-mc/archive/refs/heads/main.zip) 解压，进目录跑 `bash install.sh`。
+（这条走 git，永远拿到最新版。不想装 git 的话用镜像那条，见下。）
 
-装完就有个 `dglab` 命令，以后启动键盘上敲这一个词就行。换端口 `dglab --port 8888`。
+装完**敲 `dglab` 启动中继**。换端口 `dglab --port 8888`。
+
+<details>
+<summary>镜像下载（不装 git 的替代方案）</summary>
+
+```bash
+pkg update -y && pkg install -y curl && bash <(curl -fsSL https://cdn.jsdelivr.net/gh/Reflect137/dglab-mc@main/install.sh)
+```
+
+`raw.githubusercontent.com` 在国内经常连不上，所以走的 jsDelivr 镜像。注意这个镜像对分支有最多 12 小时缓存，刚更新完可能还是旧版；要立刻拿最新版就用 git 那条，或者把链接里的 `@main` 换成具体提交号（`@960ebc9` 这样）。
+
+</details>
 
 ## 用
 
 1. 郊狼主机和电极接好，手机开 DG-LAB APP
 2. Termux里输入`dglab`
-3. 把 `dglab-hp.js` 放进跑路的脚本目录，进入游戏并执行脚本
+3. 把 `dglab-hp.js` 放进游戏的脚本目录，进入游戏并执行脚本
 4. APP 里进 Socket 控制，地址填 `ws://127.0.0.1:9999/mc-coyote`
 
 配对成功游戏里会弹一条消息，之后挨打就有电了。
