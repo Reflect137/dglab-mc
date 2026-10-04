@@ -1,8 +1,14 @@
 # 《我的世界》× DG-LAB
 
+游戏里掉血就给郊狼加电。
+
 ## 装
 
-手机上装好 Termux，粘这一行：
+先装 Termux。去 [F-Droid](https://f-droid.org/) 装好 F-Droid 之后搜 Termux 装；或者直接下 [GitHub Releases](https://github.com/termux/termux-app/releases) 里带 `universal` 的那个 apk。
+
+> 应用商店（包括 Google Play）里的 Termux 是停更的旧版，`pkg` 会报错，别用。
+
+打开 Termux，粘这一行：
 
 ```bash
 pkg update -y && pkg install -y curl && bash <(curl -fsSL https://raw.githubusercontent.com/Reflect137/dglab-mc/main/install.sh)
