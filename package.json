@@ -1,0 +1,22 @@
+{
+  "name": "dglab-mc",
+  "version": "1.0.0",
+  "private": true,
+  "description": "《我的世界》JS ModAPI × DG-LAB 郊狼：掉血加电脚本 + V3 中继",
+  "scripts": {
+    "relay": "node tools/dglab-relay.js --port 9999",
+    "test": "node tools/check-refs.js && node test/harness.js && node tools/relay-selftest.js && node test/relay-cli-selftest.js && node test/relay-fuzz.js && node test/relay-hardening.js && node test/stress.js",
+    "test:harness": "node test/harness.js",
+    "test:relay": "node tools/relay-selftest.js",
+    "test:relay-cli": "node test/relay-cli-selftest.js",
+    "waveforms": "python3 tools/build-waveforms.py ../_extract/kit/dglab-kit-main dglab-hp.js",
+    "lint": "node tools/check-refs.js",
+    "test:stress": "node test/stress.js",
+    "test:fuzz": "node test/relay-fuzz.js",
+    "test:hardening": "node test/relay-hardening.js"
+  },
+  "license": "GPL-3.0",
+  "engines": {
+    "node": ">=18"
+  }
+}

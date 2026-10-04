@@ -1,0 +1,13 @@
+# 依赖（本项目零依赖，留着以防万一）
+node_modules/
+
+# 运行产物
+*.log
+relay.jsonl
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Python 缓存
+__pycache__/
+*.pyc
