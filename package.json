@@ -2,7 +2,7 @@
   "name": "dglab-mc",
   "version": "1.0.0",
   "private": true,
-  "description": "《我的世界》JS ModAPI × DG-LAB 郊狼：掉血加电脚本 + V3 中继",
+  "description": "《我的世界》JS ModAPI × DG-LAB",
   "scripts": {
     "relay": "node tools/dglab-relay.js --port 9999",
     "test": "node tools/check-refs.js && node test/harness.js && node tools/relay-selftest.js && node test/relay-cli-selftest.js && node test/relay-fuzz.js && node test/relay-hardening.js && node test/stress.js",
