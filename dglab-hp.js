@@ -1,41 +1,12 @@
 /**
- * ============================================================================
- *  dglab-hp.js —— 《我的世界》中国版 JS ModAPI  ×  DG-LAB 郊狼
- *  「掉血就加电」：血扣得越多，电加得越多
- * ============================================================================
+ * dglab-hp.js —— 《我的世界》× DG-LAB
  *
- *  说明
- *  ----
- *  本脚本跑在游戏的 JS 脚本环境（v2 API：require("socket") / require("player")
- *  / require("sp") / require("ImGui") ...，事件为全局函数 onTickEvent 等）。
- *  它通过 WebSocket 连接一个 DG-LAB V3 中继（Termux 里的 dglab-relay.js，
- *  或官方 wss://ws.dungeon-lab.cn/），与 DG-LAB APP 配对后：
+ * 放在游戏的脚本目录里（跟别的 JS 脚本一起），进世界后会自动连中继。
+ * 每个游戏刻读一次血量：掉血加电、回血减电、死亡拉满，设置全在游戏内的 DG-LAB 面板上。
  *
- *    1. 每个游戏刻读一次玩家生命值；
- *    2. 掉血 → 累加「电量」→ 电量决定通道强度（掉得越多强度越高）；
- *    3. 每次受伤还会触发一段波形（时长随伤害增加），让电真的“打”出来；
- *    4. 一段时间没挨打 / 回血 → 强度按设置缓慢回落，直到归零。
- *
- *  快速上手
- *  --------
- *    1) 手机 Termux 里启动中继：  node dglab-relay.js --port 9999
- *    2) 进游戏后聊天栏输入：      !dg pair
- *       会显示 APP 该连接的地址，例如  ws://127.0.0.1:9999/mc-coyote
- *    3) 在 DG-LAB APP 的「Socket 控制」里连接上面的地址；
- *       聊天栏显示「APP 已连接」后就可以开打了。
- *    4) !dg ui 打开游戏内设置面板，!dg help 看全部指令。
- *
- *  安全提醒（务必先读）
- *  --------------------
- *  * 第一次用请把「每点伤害加电」调小（例如 1），先 !dg test 3 试一下手感。
- *  * 「强度上限」「每秒最大涨幅」是安全阀，不要为了刺激调到很大。
- *  * 任何时候 !dg stop 立即归零并暂停；退出世界也会自动归零。
- *  * 饥饿、中毒、摔落、着火都会算伤害，可用「最小伤害」过滤小伤害。
- *
- *  许可
- *  ----
- *  内置波形数据取自 dglab-kit（GPL-3.0），故本脚本同样以 GPL-3.0 发布。
- * ============================================================================
+ * 依赖 JS ModAPI：require("socket"|"player"|"sp"|"minecraft"|"ImGui")，
+ * 事件用全局函数 onTickEvent / onReadyEvent / onEntityBehaviorEvent 等。
+ * 内置波形数据来自 dglab-kit（GPL-3.0）。
  */
 
 'use strict';
@@ -44,9 +15,7 @@ var SCRIPT_NAME = 'dglab-hp';
 var SCRIPT_VER = '1.0.0';
 var PANEL_TITLE = 'DG-LAB';
 
-/* ========================================================================== *
- *  1. 运行环境（取不到的模块不会让脚本崩）
- * ========================================================================== */
+/* ---- 1. 运行环境（取不到的模块不会让脚本崩） ---- */
 
 var MOD = {
     socket: null,
@@ -74,9 +43,7 @@ MOD.sp = safeRequire('sp');
 MOD.world = safeRequire('world');
 MOD.ImGui = safeRequire('ImGui');
 
-/* ========================================================================== *
- *  2. 小工具
- * ========================================================================== */
+/* ---- 2. 小工具 ---- */
 
 function nowMs() {
     return Date.now();
@@ -143,9 +110,7 @@ function encodeURIComponentSafe(s) {
     }
 }
 
-/* ========================================================================== *
- *  3. 内置波形（数据来自 dglab-kit 的郊狼波形库，16 进制 8 字节/帧）
- * ========================================================================== */
+/* ---- 3. 内置波形（数据来自 dglab-kit 的郊狼波形库，16 进制 8 字节/帧） ---- */
 
 /*__WAVEFORMS_BEGIN__*/
 var WAVEFORM_DATA = {
@@ -399,111 +364,109 @@ function waveformListText() {
     return out.join(' ');
 }
 
-/* ========================================================================== *
- *  4. 配置
- * ========================================================================== */
+/* ---- 4. 配置 ---- */
 
 var DEFAULT_CONFIG = {
     /* 连接 */
-    relayUrl: 'ws://127.0.0.1:9999/', // 中继地址
-    controllerId: 'mc-coyote',        // 固定配对 ID（本地中继支持 ?cid=）
-    autoConnect: true,                // 进世界自动连接
-    autoReconnect: true,              // 断线自动重连
-    channel: 'A',                     // 控制通道：A / B / AB（双通道）
+    relayUrl: 'ws://127.0.0.1:9999/',
+    controllerId: 'mc-coyote',
+    autoConnect: true,
+    autoReconnect: true,
+    channel: 'A',
 
     /* 通道 */
-    bScale: 1,                        // 右路强度倍率（双路时）
-    bOffset: 0,                       // 右路强度偏移（可为负）
-    bWaveform: '',                    // 右路波形（空 = 跟随主波形）
-    zeroBothChannels: true,           // 归零时左右两路都清
-    keepInSync: false,                // 设备强度被手动改高时强制拉回
+    bScale: 1,
+    bOffset: 0,
+    bWaveform: '',
+    zeroBothChannels: true,
+    keepInSync: false,
 
     /* 加电曲线 */
-    enabled: true,                    // 总开关
-    strengthPerDamage: 3,             // 每掉 1 点血（半颗心）加多少强度
-    baseStrength: 0,                  // 基础强度
-    maxStrength: 25,                  // 强度上限（硬上限）
-    energyCap: 40,                    // 电量上限
-    maxEnergyPerHit: 0,               // 单次受伤最多加多少电量（0 = 不限）
-    energyPerSecondCap: 0,            // 每秒最多累计多少电量（0 = 不限）
-    energyPerMinuteCap: 0,            // 每分钟最多累计多少电量（0 = 不限）
-    minOutputEnergy: 0,               // 电量低于这个值就彻底停（0 = 关，防残电一直放）
-    damageCurve: 'linear',            // 伤害换算曲线：线性 / 平方 / 开方
-    instantRise: true,                // 受伤瞬间到位（不做渐变）
-    startDelaySec: 0,                 // 受伤后延迟多少秒才开始加电（给反应时间）
-    stopBelowHp: 0,                   // 血量低于这个值就完全停止（0 = 关，濒死保护）
-    respawnGraceSec: 0,               // 复活后多少秒内不加电（默认关，需要时自己开）
-    instantFall: true,                // 回血/归零瞬间回落
-    maxRisePerSecond: 20,             // 关掉「瞬间到位」后才生效
-    maxFallPerSecond: 30,             // 关掉「瞬间回落」后才生效
-    minDamage: 0.5,                   // 小于这个伤害不计
-    countAbsorption: true,            // 黄心（伤害吸收）也算掉血
-    ignoreCreative: true,             // 创造 / 旁观不触发
+    enabled: true,
+    strengthPerDamage: 3,
+    baseStrength: 0,
+    maxStrength: 25,
+    energyCap: 40,
+    maxEnergyPerHit: 0,
+    energyPerSecondCap: 0,
+    energyPerMinuteCap: 0,
+    minOutputEnergy: 0,
+    damageCurve: 'linear',
+    instantRise: true,
+    startDelaySec: 0,
+    stopBelowHp: 0,
+    respawnGraceSec: 0,
+    instantFall: true,
+    maxRisePerSecond: 20,
+    maxFallPerSecond: 30,
+    minDamage: 0.5,
+    countAbsorption: true,
+    ignoreCreative: true,
 
     /* 回血 / 自然回落 */
-    healReduces: true,                // 只有回血才减电量
-    healMode: 'full',                 // full = 回满才清 / ratio = 按回血比例减 / ratioFloor = 比例减但保底
-    healFactor: 2,                    // 按比例减电时的倍率
-    hurtFloorEnergy: 0,               // 没回满血时电量保底（>0 就是「没回满就一直电」）
-    healPulse: false,                 // 回血时也放一小段波形
-    clearWhenFullHp: true,            // 满血持续一小会儿就自动清电（兜底，防黄心被打掉后卡住）
-    fullHpClearDelayMs: 800,          // 满血判定延迟（毫秒）
-    decayPerSec: 0,                   // 每秒自然回落，0 = 不回血就不减
+    healReduces: true,
+    healMode: 'full',
+    healFactor: 2,
+    hurtFloorEnergy: 0,
+    healPulse: false,
+    clearWhenFullHp: true,
+    fullHpClearDelayMs: 800,
+    decayPerSec: 0,
     holdSec: 0,
     holdResetDamage: 0,
 
     /* 死亡 */
-    deathMode: 'max',                 // max = 电量拉满 / zero = 归零 / none = 不动
-    deathInstant: true,               // 死亡瞬间拉满
-    deathBurstSec: 3,                 // 死亡波形时长（秒）
+    deathMode: 'max',
+    deathInstant: true,
+    deathBurstSec: 3,
 
     /* 波形 */
-    burstEnabled: true,               // 受伤出波形
-    waveform: 'BUBBLE',               // 波形预设
-    burstBaseSec: 1,                  // 波形基础时长
-    burstPerDamageSec: 0.5,           // 每点伤害加时长
-    burstMaxSec: 8,                   // 波形最长
-    continuousPulse: true,            // 电量 > 0 时一直续波形（真正「一直电」）
-    waveSpeed: 1,                     // 波形快慢：>1 更急促，<1 更缓慢
-    bWaveShiftFrames: 0,              // 右路波形错开多少帧（双路不同步）
-    randomWaveform: false,            // 每次受伤随机换一种波形
-    pulseCooldownMs: 0,               // 波形重发间隔（0 = 每次都续）
-    pulseLeadMs: 0,                   // 续波形提前量
+    burstEnabled: true,
+    waveform: 'BUBBLE',
+    burstBaseSec: 1,
+    burstPerDamageSec: 0.5,
+    burstMaxSec: 8,
+    continuousPulse: true,
+    waveSpeed: 1,
+    bWaveShiftFrames: 0,
+    randomWaveform: false,
+    pulseCooldownMs: 0,
+    pulseLeadMs: 0,
 
     /* 增益 */
-    critEnabled: true,                // 重击加成
-    critDamage: 4,                    // 单次伤害达到多少算重击（点）
-    critFactor: 1.5,                  // 重击倍率
-    lowHpEnabled: false,              // 低血加成
-    lowHpThreshold: 0.3,              // 血量低于最大值这个比例时生效
-    lowHpFactor: 1.5,                 // 低血倍率
-    comboEnabled: false,              // 连击加成
-    comboWindowMs: 3000,              // 连击窗口（毫秒）
-    comboStep: 0.2,                   // 每层连击加成
-    comboMax: 2,                      // 连击倍率上限
+    critEnabled: true,
+    critDamage: 4,
+    critFactor: 1.5,
+    lowHpEnabled: false,
+    lowHpThreshold: 0.3,
+    lowHpFactor: 1.5,
+    comboEnabled: false,
+    comboWindowMs: 3000,
+    comboStep: 0.2,
+    comboMax: 2,
 
     /* 安全 */
-    manualZeroHoldMs: 1500,           // 手动归零后这段时间内不再加电（防止刚归零又被加回来）
-    maxSendPerSec: 10,                // 每秒最多下发几条强度
-    pollEveryTicks: 1,                // 每几刻读一次血量
+    manualZeroHoldMs: 1500,
+    maxSendPerSec: 10,
+    pollEveryTicks: 1,
 
     /* 界面 */
-    showPanel: true,                  // 显示设置面板
-    clientNotify: true,               // 关键事件用本地消息提示
-    notifyHurt: false,                // 每次掉血提示
-    notifyDeviceChange: false,        // 设备强度被改动时提示
-    notifyMinIntervalMs: 0,           // 提示最小间隔（防刷屏，0 = 不限）
-    panelCompact: false,              // 面板只显示常用设置
-    hudEnabled: false,                // 屏幕上常驻一条小状态条
-    hudX: 20,                         // 状态条位置 X
-    hudY: 20,                         // 状态条位置 Y
-    interceptChat: false,             // 接管聊天指令（默认关）
-    debug: false,                     // 调试日志
+    showPanel: true,
+    clientNotify: true,
+    notifyHurt: false,
+    notifyDeviceChange: false,
+    notifyMinIntervalMs: 0,
+    panelCompact: false,
+    hudEnabled: false,
+    hudX: 20,
+    hudY: 20,
+    interceptChat: false,
+    debug: false,
 };
 
 var CONFIG = {};
 
-/* 设置项元数据：面板 / !dg set / !dg list 共用 */
+/* 设置项元数据（面板、指令、持久化共用） */
 var SETTING_GROUPS = ['连接', '通道', '加电曲线', '增益', '回血回落', '死亡', '波形', '安全', '界面'];
 
 var SETTING_DEFS = [
@@ -649,9 +612,7 @@ function coerceValue(def, raw) {
     return String(raw);
 }
 
-/* ========================================================================== *
- *  5. 设置持久化（sp 模块）
- * ========================================================================== */
+/* ---- 5. 设置持久化（sp 模块） ---- */
 
 var SP_PREFIX = 'dglab_hp.';
 
@@ -704,16 +665,13 @@ function saveConfig() {
     return true;
 }
 
-/* ========================================================================== *
- *  6. 运行时状态
- * ========================================================================== */
+/* ---- 6. 运行时状态 ---- */
 
 var S = {
     inited: false,
     lastTickAt: 0,
     tickCount: 0,
 
-    /* 玩家生命 */
     player: null,
     playerUid: '',
     lastHp: null,
@@ -723,7 +681,6 @@ var S = {
     hurtFlag: false,
     lastDamage: 0,
 
-    /* 加电 */
     energy: 0,          // 累计电量（强度点）
     strength: 0,        // 当前强度（浮点，下发取整）
     lastDamageAt: -1e9, // 上次受伤时间
@@ -811,15 +768,12 @@ function activeChannelLetters() {
     return out;
 }
 
-/* 归零/清波形要处理哪些通道 */
 function zeroLetters() {
     if (CONFIG.zeroBothChannels) return ['A', 'B'];
     return activeChannelLetters();
 }
 
-/* ========================================================================== *
- *  7. DG-LAB V3 客户端
- * ========================================================================== */
+/* ---- 7. DG-LAB V3 客户端 ---- */
 
 var DG = {
     ws: null,
@@ -842,7 +796,6 @@ var DG = {
         return base + sep + 'cid=' + encodeURIComponentSafe(CONFIG.controllerId);
     },
 
-    /* APP 该连的地址 */
     buildPairing: function (id) {
         var base = String(CONFIG.relayUrl || '').trim();
         if (!base) base = DEFAULT_CONFIG.relayUrl;
@@ -949,7 +902,6 @@ var DG = {
         this.pendingStrength = null;
     },
 
-    /* 立刻把当前强度重发给（新）通道 */
     resendStrength: function (t) {
         this.invalidateStrength();
         if (this.state !== 'paired') return;
@@ -960,7 +912,7 @@ var DG = {
     flushStrength: function (t, force) {
         if (this.pendingStrength === null) return;
         if (this.state !== 'paired') return;   // 没配对就别消费掉待发值，等配对后再发
-        /* B5：节流要在这里统一兜住，否则「受伤瞬间到位」那条路会绕过每秒下发上限 */
+        /* 节流统一放这里，否则「受伤瞬间到位」会绕过每秒下发上限 */
         var interval = 1000 / clamp(CONFIG.maxSendPerSec, 1, 50);
         if (!force && t - this.lastSendAt < interval) return;   // 留在 pending，交给 pump 稍后发
         var v = this.pendingStrength;
@@ -1035,7 +987,6 @@ var DG = {
         return ok;
     },
 
-    /* 某个通道：强度 0 + 清波形 */
     zeroChannel: function (letter) {
         if (this.state !== 'paired') return;
         this.frame({
@@ -1049,7 +1000,7 @@ var DG = {
         this.clearChannel(letter);
     },
 
-    /* 立即归零：默认左右两路都归零，避免另一路残留 */
+    /* 立即归零：两路都清，避免另一路残留 */
     zero: function () {
         this.pendingStrength = null;
         this.sentStrength = 0;
@@ -1162,8 +1113,7 @@ var DG = {
         this.pendingStrength = null;
         logAlways('连接关闭 code=' + code + ' reason=' + (reason || '-'));
         if (was === 'paired') chat('[DG-LAB] 与中继断开');
-        /* B6：暂停时也要排上重连计划（只是真正连接由 pump 在恢复后才执行），
-         * 否则「暂停 → 掉线 → 恢复」之后永远不重连 */
+        /* 暂停时也排上重连计划，否则「暂停→掉线→恢复」后永远不重连 */
         if (CONFIG.autoReconnect) {
             var wait = Math.min(30000, 2000 * Math.pow(2, Math.min(this.retry, 4)));
             this.retry++;
@@ -1197,9 +1147,7 @@ var DG = {
     },
 };
 
-/* ========================================================================== *
- *  8. 玩家生命读取
- * ========================================================================== */
+/* ---- 8. 玩家生命读取 ---- */
 
 function resolvePlayer() {
     var p = null;
@@ -1210,10 +1158,8 @@ function resolvePlayer() {
     }
     if (p) return p;
 
-    /* 回退路径（B4）：绝不能用 getPlayers()[0] 顶替自己——多人时那是别人，
-     * 会把别人的掉血算到自己头上。只有在能确认是自己时才返回：
-     *   1) 列表里唯一那个 uid 和已知 uid 相同；
-     *   2) uid 还未知（刚进世界）时，列表里只有一个人（单人世界）。 */
+    /* 回退路径不能直接取 getPlayers()[0]：多人时那是别人，会把别人的掉血算到自己头上。
+     * 只在 uid 对得上、或刚进世界且只有一个人时才认。 */
     try {
         var world = MOD.world && MOD.world.getClientWorld ? MOD.world.getClientWorld() : null;
         if (world && world.getPlayers) {
@@ -1285,9 +1231,7 @@ function readVitals(p) {
     return { hp: hp, maxHp: maxHp, absorb: absorb, total: hp + absorb };
 }
 
-/* ========================================================================== *
- *  9. 加电引擎
- * ========================================================================== */
+/* ---- 9. 加电引擎 ---- */
 
 function resetOutput(reason, holdMs) {
     var hold = Number(holdMs) || 0;
@@ -1305,13 +1249,12 @@ function resetOutput(reason, holdMs) {
     log('输出归零:', reason || '');
 }
 
-/* 电量能到多高 */
 function energyCapValue() {
     var cap = Math.min(CONFIG.energyCap, CONFIG.maxStrength - baseStrengthValue());
     return cap > 0 ? cap : 0;
 }
 
-/* S1：基础强度也不能超过强度上限，否则满血零电量也会常驻在上限上 */
+/* 基础强度也不能超过强度上限，否则满血零电量也会常驻在上限上 */
 function baseStrengthValue() {
     var b = Number(CONFIG.baseStrength) || 0;
     if (b > CONFIG.maxStrength) b = CONFIG.maxStrength;
@@ -1319,7 +1262,6 @@ function baseStrengthValue() {
     return b;
 }
 
-/* 当前电量对应的目标强度 */
 function strengthTarget() {
     var base = baseStrengthValue();
     var target = base + S.energy;
@@ -1329,7 +1271,6 @@ function strengthTarget() {
     return target;
 }
 
-/* 血量低于「低于血量就停」时完全不加电 */
 function isHpTooLow() {
     var line = Number(CONFIG.stopBelowHp) || 0;
     if (line <= 0) return false;
@@ -1343,7 +1284,6 @@ function extendCharge(t, durSec) {
     if (until > S.chargeUntil) S.chargeUntil = until;
 }
 
-/* 每秒 / 每分钟加电上限 */
 function applyRateCaps(add, t) {
     if (CONFIG.energyPerSecondCap > 0) {
         if (t - S.secondStartedAt >= 1000) {
@@ -1437,7 +1377,7 @@ function damageMultiplier(dmg, t) {
 }
 
 function onDamage(dmg, t) {
-    /* 暂停 / 关闭时绝不下发（原来这里会先加电再被引擎抹掉，看起来像「归零无效」） */
+    /* 暂停/关闭时绝不下发，否则会先加电再被抹掉，看起来像「归零无效」 */
     if (!CONFIG.enabled || S.paused) return;
     /* 刚手动归零的静默期：这段时间内不再加电 */
     if (t < S.zeroHoldUntil) {
@@ -1465,7 +1405,6 @@ function onDamage(dmg, t) {
 
     add = applyRateCaps(add, t);
 
-    /* 这一段波形（算好时长，可能要延迟才用） */
     var burstSec = 0;
     if (CONFIG.burstEnabled && (CONFIG.pulseCooldownMs <= 0 || t - S.lastBurstAt >= CONFIG.pulseCooldownMs)) {
         burstSec = clamp(CONFIG.burstBaseSec + dmg * CONFIG.burstPerDamageSec, 0.5, CONFIG.burstMaxSec);
@@ -1525,7 +1464,6 @@ function onHeal(amount, t) {
         if (CONFIG.instantFall) applyStrengthNow(t);
     }
 
-    /* 回血也放一小段波形（可选） */
     if (CONFIG.healPulse && CONFIG.burstEnabled) {
         var until = t + Math.max(1000, Math.round(CONFIG.burstBaseSec * 1000 / 2));
         if (until > S.chargeUntil) S.chargeUntil = until;
@@ -1541,8 +1479,7 @@ function keepPulse(t) {
     var remain = S.chargeUntil - t;
     var sec = clamp(Math.ceil(remain / 1000), 1, CONFIG.burstMaxSec);
     if (DG.sendPulse(sec)) {
-        /* B2：提前量不能大于等于这一段波形本身，否则 nextPulseAt 会被算到当前时刻，
-         * 变成每个游戏刻都重发（中继还会不停 clear 重排） */
+        /* 提前量不能吃掉整段波形，否则每个游戏刻都会重发 */
         var lead = clamp(CONFIG.pulseLeadMs, 0, 2000);
         var next = t + Math.round(sec * 1000) - lead;
         if (next < t + 300) next = t + 300;   /* 最短 300ms 一次，防止刷屏 */
@@ -1572,7 +1509,6 @@ function engineTick(t, dtMs) {
         return;
     }
 
-    /* 延迟加电到点了：把攒下的电量一次性加上 */
     if (S.pendingAdd > 0 && t >= S.pendingAt) {
         var pa = S.pendingAdd;
         S.pendingAdd = 0;
@@ -1604,8 +1540,7 @@ function engineTick(t, dtMs) {
         S.comboCount = 0;
     }
 
-    /* 满血兜底：血量一直是满的（例如黄心被打掉、瞬间回满），
-     * 等不到「回血事件」也要把电量清掉，否则会一直带电 */
+    /* 满血兜底：黄心被打掉时血量没变，等不到回血事件，这里按时间兜底清电 */
     if (CONFIG.clearWhenFullHp && CONFIG.healReduces && S.lastHp !== null && S.lastMaxHp > 0) {
         var isFullHp = (S.lastHp > 0.01 && S.lastHp >= S.lastMaxHp - 0.01);
         if (isFullHp) {
@@ -1624,8 +1559,7 @@ function engineTick(t, dtMs) {
         S.fullHpSince = 0;
     }
 
-    /* 没回满血时的电量保底：>0 就等于「没回满就一直电」
-     * B3：必须尊重手动归零的静默期，否则点完归零下一刻又被补回来 */
+    /* 没回满血时的电量保底（要尊重手动归零的静默期） */
     if (CONFIG.hurtFloorEnergy > 0 && t >= S.zeroHoldUntil &&
         S.lastHp !== null && S.lastMaxHp > 0 &&
         S.lastHp > 0.01 && S.lastHp < S.lastMaxHp - 0.01) {
@@ -1639,7 +1573,6 @@ function engineTick(t, dtMs) {
         if (keep > S.chargeUntil) S.chargeUntil = keep;
     }
 
-    /* 目标强度 / 渐变 */
     var target = strengthTarget();
     if (target > S.strength) {
         S.strength = CONFIG.instantRise ? target : Math.min(target, S.strength + CONFIG.maxRisePerSecond * dt);
@@ -1654,7 +1587,6 @@ function engineTick(t, dtMs) {
     if (CONFIG.keepInSync && DG.state === 'paired' && t - DG.lastSendAt > 1000) {
         var plan = channelPlan();
         for (var i = 0; i < plan.length; i++) {
-            /* 期望值要算上倍率和偏移，和 flushStrength 的算法保持一致 */
             var expect = Math.round(S.strength * plan[i].scale + plan[i].offset);
             if (expect < 0) expect = 0;
             var actual = plan[i].letter === 'A' ? DG.device.A : DG.device.B;
@@ -1669,9 +1601,7 @@ function engineTick(t, dtMs) {
     keepPulse(t);
 }
 
-/* ========================================================================== *
- *  10. 每个游戏刻
- * ========================================================================== */
+/* ---- 10. 每个游戏刻 ---- */
 
 function pollVitals(t) {
     var p = resolvePlayer();
@@ -1723,14 +1653,12 @@ function pollVitals(t) {
     var dmg = S.lastTotal - v.total;
     var heal = v.total - S.lastTotal;
 
-    /* 先把状态更新到最新，再派发事件：
-     * onHeal 要按「回血之后的血量」判断是否回满，低血加成也要按最新血量算 */
+    /* 先更新血量再派发事件：onHeal 要按回血后的血量判断是否回满 */
     S.lastHp = v.hp;
     S.lastTotal = v.total;
     S.lastAbsorb = v.absorb;
 
-    /* dmg > 0 的判断不能少：最小伤害设成 0 时，血量没变化（dmg=0）会被当成
-     * 「受伤」每刻触发一次，导致波形被无限续播 */
+    /* dmg > 0 不能省：最小伤害设 0 时，dmg=0 会被每刻当成受伤，波形无限续播 */
     if (dmg > 0.0001 && dmg >= CONFIG.minDamage) {
         onDamage(dmg, t);
     } else if (heal > 0.01) {
@@ -1795,16 +1723,13 @@ function dglabHurt(id, behavior, value) {
     if (behavior === 2) S.hurtFlag = true;
 }
 
-/* ========================================================================== *
- *  11. 初始化与生命周期
- * ========================================================================== */
+/* ---- 11. 初始化与生命周期 ---- */
 
 function init(reason) {
     if (S.inited) return;
     S.inited = true;
     buildWaveformIndex();
     loadConfig();
-    /* 波形枚举补全 */
     for (var i = 0; i < SETTING_DEFS.length; i++) {
         if (SETTING_DEFS[i].key !== 'waveform') continue;
         SETTING_DEFS[i].values = WAVE_IDS.slice(0);
@@ -1820,7 +1745,7 @@ function init(reason) {
         for (var wj = 0; wj < WAVE_IDS.length; wj++) bLabels.push(WAVEFORM_DATA[WAVE_IDS[wj]].cn);
         SETTING_DEFS[j].labels = bLabels;
     }
-    /* S2：把从 sp 读出来的值做一次合法性校验（旧版本残留 / 手改 sp 都可能塞进非法值） */
+    /* 把从 sp 读出来的值做一次合法性校验（旧版本残留 / 手改 sp 都可能塞进非法值） */
     for (var vi = 0; vi < SETTING_DEFS.length; vi++) {
         var vd = SETTING_DEFS[vi];
         if (vd.type !== 'enum') continue;
@@ -1858,7 +1783,6 @@ function connectRelay(manual) {
 function dglabReady() {
     if (!S.inited) init('onReadyEvent');
     else {
-        /* 重进世界：重新读设置，必要时重连 */
         loadConfig();
         if ((DG.state === 'idle' || DG.state === 'closed') && CONFIG.autoConnect) connectRelay(false);
     }
@@ -1877,9 +1801,7 @@ function dglabLeave() {
     logAlways('已退出世界，输出归零');
 }
 
-/* ========================================================================== *
- *  12. 指令（聊天栏输入 !dg ...）
- * ========================================================================== */
+/* ---- 12. 指令（聊天栏输入 !dg ...） ---- */
 
 function fmtConfigList() {
     var lines = [];
@@ -1952,14 +1874,14 @@ function setSetting(key, raw, save, quiet) {
             var newLetters = channelLetters();
             for (oi = 0; oi < newLetters.length; oi++) DG.clearChannel(newLetters[oi]); /* 新通道也清一下 */
         }
-        /* B1：换了通道必须立刻把当前强度重发一次，否则 sentStrength 相等会被判成「不用发」 */
+        /* 换了通道必须立刻把当前强度重发一次，否则 sentStrength 相等会被判成「不用发」 */
         DG.resendStrength(nowMs());
     }
-    /* B1 同根因：倍率/偏移变了，右路的实际值也变了，同样要重发 */
+    /* 倍率/偏移变了，右路的实际值也变了，同样要重发 */
     if ((key === 'bScale' || key === 'bOffset') && DG.state === 'paired') {
         DG.resendStrength(nowMs());
     }
-    /* B7：切换「黄心也算掉血」会改变被测量的量，必须重新校准，否则会误判一次大伤害/大回血 */
+    /* 切换「黄心也算掉血」会改变被测量的量，必须重新校准，否则会误判一次大伤害/大回血 */
     if (key === 'countAbsorption') {
         S.lastHp = null;
         S.lastTotal = null;
@@ -2014,7 +1936,6 @@ function handleCommand(msg) {
     }
     if (cmd === 'resume') {
         S.paused = false;
-        /* 暂停期间可能掉线了，恢复时顺手补一次连接 */
         if ((DG.state === 'idle' || DG.state === 'closed') && CONFIG.autoConnect) connectRelay(false);
         chat('[DG-LAB] 已恢复');
         return true;
@@ -2121,9 +2042,7 @@ function dglabChat(message) {
     return true; /* 拦截，不当作普通聊天发出 */
 }
 
-/* ========================================================================== *
- *  13. 游戏内设置面板（ImGui，取不到就自动跳过，用 !dg 指令一样能设）
- * ========================================================================== */
+/* ---- 13. 游戏内设置面板（ImGui，取不到就自动跳过，用 !dg 指令一样能设） ---- */
 
 var AV = {};
 
@@ -2448,7 +2367,6 @@ function drawPanel() {
     if (avShow && avShow.value === false) setSetting('showPanel', false, true, true);
 }
 
-/* 屏幕常驻小状态条（不用开面板就能看到电量和强度） */
 function drawHud() {
     if (!CONFIG.hudEnabled) return;
     if (!UI.ok && !UI.init()) return;
@@ -2489,9 +2407,7 @@ function dglabImgui() {
     }
 }
 
-/* ========================================================================== *
- *  14. 自动初始化（有的环境不会自动调 onReadyEvent）
- * ========================================================================== */
+/* ---- 14. 自动初始化（有的环境不会自动调 onReadyEvent） ---- */
 
 try {
     if (typeof setTimeout === 'function') {
@@ -2593,9 +2509,7 @@ var onImGuiRenderEvent = function () {
     }
 };
 
-/* ========================================================================== *
- *  15. 对外接口（测试脚手架 / 其它脚本也能调用）
- * ========================================================================== */
+/* ---- 15. 对外接口（测试脚手架 / 其它脚本也能调用） ---- */
 
 var API = {
     VERSION: SCRIPT_VER,

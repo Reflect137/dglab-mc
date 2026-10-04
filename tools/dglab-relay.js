@@ -2,32 +2,16 @@
 'use strict';
 
 /*
- * dglab-relay.js —— DG-LAB WebSocket V3 中继服务（纯 Node.js，零外部依赖）
- * =====================================================================
- * 行为逐条对齐权威参考实现：_extract/ws/dglab-websocket-server-main/v3-server.ts
- * （TypeScript / Bun），本文件用 node:http + node:crypto 自己实现了最小可用的
- * RFC6455 服务端（掩码、125/126/127 长度分支、文本帧、ping/pong/close、
- * 分片 continuation 拼接）。
- *
- * 相对参考实现的**有意**差异只有两处（其余尽量逐行对齐）：
- *   1) 控制端可用 `?cid=<[A-Za-z0-9_-]{1,64}>` 固定 clientId（被占用时回退随机 uuid）；
- *   2) `GET /` 与 `GET /__status` 返回 200 状态 JSON（参考实现这两条也返回 426）。
+ * dglab-relay.js —— DG-LAB WebSocket V3 中继（纯 Node.js，零依赖）
  *
  * 用法：
  *   node dglab-relay.js [--port 9999] [--host 0.0.0.0] [--verbose] [--quiet] [--log relay.jsonl]
+ *   GET / 与 /__status 返回状态 JSON；控制端可用 ?cid=<id> 固定 clientId。
  *
- * Termux（安卓手机）用法：
- *   pkg install nodejs
- *   termux-wake-lock          # 可选：防止后台被杀
- *   node dglab-relay.js --port 9999
- *   # 同一台手机里的游戏与 DG-LAB APP 都连 127.0.0.1:9999
+ * 协议行为对齐参考实现 dglab-websocket-server 的 v3-server.ts，
+ * 自己实现了最小 RFC6455 服务端（掩码、长度分支、文本帧、ping/pong/close、分片拼接）。
  *
- * 模块接口：
- *   const { createRelay } = require('./dglab-relay.js');
- *   const relay = createRelay({ port: 0, host: '127.0.0.1', verbose: false, logFile: null });
- *   await relay.listen();     // => { port }
- *   relay.port; relay.events; relay.on('message'|'pulse'|'pair'|'open'|'close', fn);
- *   await relay.close();
+ * 模块接口：const { createRelay } = require('./dglab-relay.js')
  */
 
 const http = require('node:http');
@@ -75,7 +59,6 @@ const STALE_CONTROLLER_MS = 150000;
 // 日志里单条 message 最多留多少字符
 const MAX_LOG_MESSAGE = 4096;
 
-// 事件数组上限（防止长跑进程内存无限增长；协议行为不受影响）
 const MAX_EVENTS = 20000;
 
 const DEFAULT_PORT = 9999;
@@ -185,14 +168,12 @@ function parsePulseMessage(message) {
     return { frames: parsed.map((item) => item.toUpperCase()) };
 }
 
-/** 循环补齐 / 截断到总帧数 */
 function fitFramesToLength(frames, totalFrames) {
     const firstFrame = frames[0];
     if (firstFrame === undefined) return [];
     return Array.from({ length: totalFrames }, (_, index) => frames[index % frames.length] ?? firstFrame);
 }
 
-/** 把总帧数均分成 packetCount 段（按比例切片，过滤空段） */
 function splitFrames(frames, packetCount) {
     return Array.from({ length: packetCount }, (_, index) => {
         const start = Math.floor((index * frames.length) / packetCount);
@@ -219,7 +200,6 @@ function safeStringify(value, maxLen = 4096) {
     return text;
 }
 
-/** 入站/出站报文的浅层截断（message 字段可能非常大） */
 function truncatePayload(data) {
     if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
     const out = {};
@@ -235,7 +215,6 @@ function truncatePayload(data) {
     return out;
 }
 
-/** 估算一条事件占多少字节（用于字节预算） */
 function estimateEventSize(evt) {
     if (!evt || typeof evt !== 'object') return 64;
     const msg = evt.data && typeof evt.data === 'object' ? evt.data.message : undefined;
@@ -294,7 +273,6 @@ function buildPulseSequence(data, channel, time, sendsPerSecond) {
 
 // ---------------------------------------------------------------- RFC6455 帧编解码
 
-/** 服务端发帧：不掩码，支持 125 / 126(16位) / 127(64位) 三种长度分支 */
 function encodeFrame(opcode, payload) {
     const body = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload), 'utf8');
     const len = body.length;
@@ -382,9 +360,8 @@ class WsConnection {
         socket.on('error', () => {
             /* 统一走 close 流程 */
         });
-        // 对端只发 FIN（半关闭，HTTP 升级过来的 socket 默认允许半开）：
-        // 以前这里不处理，连接会一直挂在 connections/webToApp 里，
-        // 导致 ?cid= 被僵尸连接占住、重连变随机 id
+        // 对端只发 FIN（半关闭）也要清理，否则连接一直挂在表里，
+        // ?cid= 会被僵尸连接占住，重连就变成随机 id
         socket.on('end', () => {
             if (this.readyState === STATE.CLOSED) return;
             /* 只有在「还没收到过关闭帧（仍是 1006）」时才把原因写成半关闭，
@@ -446,8 +423,7 @@ class WsConnection {
                 maskKey = buf.subarray(offset, offset + 4);
                 offset += 4;
             }
-            // 说明：RFC6455 要求客户端必须掩码、服务端遇到未掩码帧应关闭连接。
-            // 这里选择宽容处理（未掩码帧按原样接收），避免手写的调试客户端被误杀。
+            // 有意宽容：RFC 要求未掩码帧断开，但这样会误杀手写的调试客户端
 
             if (len > MAX_PAYLOAD) {
                 this._fail(1009, 'payload_too_large');
@@ -675,17 +651,16 @@ class Relay extends EventEmitter {
         this.host = opts.host ?? DEFAULT_HOST;
         this.port = opts.port ?? DEFAULT_PORT;
         this.verbose = !!opts.verbose;
-        this.quiet = !!opts.quiet;   // quiet: 不打 Termux 使用提示（测试脚手架用）
+        this.quiet = !!opts.quiet;   // 不打启动提示
         this.logFile = opts.logFile ?? null;
 
-        // 可选覆盖（默认与参考实现的环境变量一致）
         this.heartbeatMs = opts.heartbeatMs ?? HEARTBEAT_MS;
         this.idleTimeoutMs = opts.idleTimeoutMs ?? IDLE_TIMEOUT_MS;
         this.staleMs = opts.staleMs ?? envNumber('STALE_TIMEOUT', STALE_CONTROLLER_MS);
         this.sendsPerSecond = opts.sendsPerSecond ?? DEFAULT_PUNISHMENT_TIME;
         this.defaultDuration = opts.defaultDuration ?? DEFAULT_PUNISHMENT_DURATION;
 
-        /** 事件流（测试脚手架用） */
+        /** 事件流（供外部订阅/排查） */
         this.events = [];
 
         // clientId -> { clientId, conn, createdAt, idleTimer, role }

@@ -4,9 +4,7 @@
 
 ## 装
 
-先装 Termux。去 [F-Droid](https://f-droid.org/) 装好 F-Droid 之后搜 Termux 装；或者直接下 [GitHub Releases](https://github.com/termux/termux-app/releases) 里带 `universal` 的那个 apk。
-
-> 应用商店（包括 Google Play）里的 Termux 是停更的旧版，`pkg` 会报错，别用。
+先装 Termux。去[GitHub Releases](https://github.com/termux/termux-app/releases) 里安装带 `universal` 的那个 apk。
 
 打开 Termux，粘这一行：
 
@@ -83,10 +81,4 @@ bash ~/dglab-mc/tools/get-game-script.sh      # 存到 /sdcard/Download/
 
 两处协议坑记一下：强度指令的 `message` 不能以 `strength` 开头（中继会当成 APP 回传直接透传，官方 SDK 用的是 `set channel`）；波形包前缀是通道字母 `pulse-A:`，而强度和清除用的是通道号 `strength-1+2+20`、`clear-1`。
 
-## 测试
 
-```bash
-npm test
-```
-
-203 项 + 压力测试，跑一遍四十来秒。里面包含中继被畸形报文打、日志管道断开、僵尸连接占号这些崩溃场景的回归。

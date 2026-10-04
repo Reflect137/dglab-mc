@@ -85,10 +85,6 @@ if [ "$DO_CHECK" = "1" ]; then
     have curl && ok "curl 已安装" || warn "没装 curl（下载游戏脚本时要用）"
     [ -d "$DIR/.git" ] && ok "仓库已存在：$DIR" || warn "仓库还不存在：$DIR"
     [ -w "$BIN_DIR" ] && ok "可写目录：$BIN_DIR（能装 dglab 命令）" || warn "$BIN_DIR 不可写"
-    if have node && [ -f "$DIR/tools/dglab-relay.js" ]; then
-        ok "中继脚本存在，自测一下："
-        node "$DIR/tools/check-refs.js" >/dev/null 2>&1 && ok "静态检查通过" || warn "静态检查没通过（可能是改了代码）"
-    fi
     say ""
     say "检查完毕。直接运行 bash install.sh 即可安装。"
     exit 0
