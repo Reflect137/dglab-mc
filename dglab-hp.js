@@ -430,6 +430,12 @@ var DEFAULT_CONFIG = {
     waveSpeed: 1,
     bWaveShiftFrames: 0,
     randomWaveform: false,
+    waveRotateMode: 'off',            // 波形轮换：关 / 顺序 / 随机
+    waveRotateOnHit: true,            // 受伤时轮换
+    waveRotateEveryN: 1,              // 每 N 次受伤换一次
+    waveRotateIntervalSec: 0,         // 每隔 N 秒轮换（0 = 关）
+    waveRotateDelayMs: 0,             // 受伤后延迟多久才换
+    waveRotateMinGapMs: 2000,         // 两次轮换的最小间隔
     pulseCooldownMs: 0,
     pulseLeadMs: 0,
 
@@ -538,6 +544,12 @@ var SETTING_DEFS = [
     { key: 'waveSpeed', cn: '波形快慢', group: '波形', type: 'float', min: 0.5, max: 2, step: 0.05 },
     { key: 'bWaveShiftFrames', cn: '右路波形错开', group: '波形', type: 'int', min: 0, max: 20 },
     { key: 'randomWaveform', cn: '随机波形', group: '波形', type: 'bool' },
+    { key: 'waveRotateMode', cn: '波形轮换', group: '波形', type: 'enum', values: ['off', 'sequence', 'random'], labels: ['关', '按顺序', '随机'] },
+    { key: 'waveRotateOnHit', cn: '受伤时轮换', group: '波形', type: 'bool' },
+    { key: 'waveRotateEveryN', cn: '每几次受伤换', group: '波形', type: 'int', min: 1, max: 50 },
+    { key: 'waveRotateIntervalSec', cn: '定时轮换秒数', group: '波形', type: 'float', min: 0, max: 600, step: 5 },
+    { key: 'waveRotateDelayMs', cn: '切换延迟', group: '波形', type: 'int', min: 0, max: 10000 },
+    { key: 'waveRotateMinGapMs', cn: '切换最小间隔', group: '波形', type: 'int', min: 0, max: 60000 },
     { key: 'pulseCooldownMs', cn: '波形重发间隔', group: '波形', type: 'int', min: 0, max: 10000 },
     { key: 'pulseLeadMs', cn: '续波形提前量', group: '波形', type: 'int', min: 0, max: 2000 },
 
@@ -694,6 +706,10 @@ var S = {
     lastBurstAt: -1e9,    // 上次触发波形的时间
     lastPulseAt: 0,       // 上次真正发出波形的时间
     waveOverride: '',     // 随机波形时这一次用的波形
+    waveHits: 0,          // 距离上次轮换累计的受伤次数
+    waveSwitchAt: 0,      // 延迟轮换的到点时间（0 = 没有待切换）
+    waveNextAt: 0,        // 定时轮换的下次时间
+    lastWaveSwitchAt: -1e9,  // 上次轮换的时间
     fullHpSince: 0,       // 从什么时候开始满血（兜底清电用）
     zeroHoldUntil: 0,     // 手动归零后的静默期
     lastAddAmount: 0,     // 上次加了多少电
@@ -1405,6 +1421,17 @@ function onDamage(dmg, t) {
 
     add = applyRateCaps(add, t);
 
+    /* 波形轮换：攒够次数就换（可以延迟一点再换） */
+    if (CONFIG.waveRotateMode !== 'off' && CONFIG.waveRotateOnHit) {
+        S.waveHits++;
+        var everyN = Math.max(1, Math.round(CONFIG.waveRotateEveryN));
+        if (S.waveHits >= everyN && !S.waveSwitchAt &&
+            t - S.lastWaveSwitchAt >= CONFIG.waveRotateMinGapMs) {
+            S.waveSwitchAt = t + Math.max(0, Math.round(CONFIG.waveRotateDelayMs));
+        }
+    }
+
+    /* 这一段波形（算好时长，可能要延迟才用） */
     var burstSec = 0;
     if (CONFIG.burstEnabled && (CONFIG.pulseCooldownMs <= 0 || t - S.lastBurstAt >= CONFIG.pulseCooldownMs)) {
         burstSec = clamp(CONFIG.burstBaseSec + dmg * CONFIG.burstPerDamageSec, 0.5, CONFIG.burstMaxSec);
@@ -1420,7 +1447,7 @@ function onDamage(dmg, t) {
         S.energy = Math.min(S.energy + add, energyCapValue());
         S.lastAddAmount = add;
         S.lastAddAt = t;
-        if (CONFIG.randomWaveform && WAVE_IDS.length) {
+        if (CONFIG.randomWaveform && CONFIG.waveRotateMode === 'off' && WAVE_IDS.length) {
             S.waveOverride = WAVE_IDS[Math.floor(Math.random() * WAVE_IDS.length)];
         }
         if (burstSec > 0) extendCharge(t, burstSec);
@@ -1472,6 +1499,52 @@ function onHeal(amount, t) {
     log('回血', round1(amount), '模式', CONFIG.healMode, '剩余电量', round1(S.energy));
 }
 
+/* 波形轮换：顺序取下一个，或随机取一个不同的 */
+function rotateWave(t) {
+    var mode = CONFIG.waveRotateMode;
+    if ((mode !== 'sequence' && mode !== 'random') || !WAVE_IDS.length) return false;
+    var idx = WAVE_IDS.indexOf(CONFIG.waveform);
+    if (idx < 0) idx = 0;
+    var next;
+    if (mode === 'random') {
+        if (WAVE_IDS.length < 2) return false;
+        do {
+            next = Math.floor(Math.random() * WAVE_IDS.length);
+        } while (next === idx);
+    } else {
+        next = (idx + 1) % WAVE_IDS.length;
+    }
+    CONFIG.waveform = WAVE_IDS[next];
+    S.nextPulseAt = 0;         // 立刻用新波形，不等当前这段放完
+    S.waveHits = 0;
+    S.lastWaveSwitchAt = t;
+    log('波形轮换 →', CONFIG.waveform);
+    return true;
+}
+
+/* 每刻检查：定时轮换 + 受伤后的延迟轮换 */
+function tickWaveRotate(t) {
+    var mode = CONFIG.waveRotateMode;
+    if (mode !== 'sequence' && mode !== 'random') {
+        S.waveSwitchAt = 0;
+        S.waveNextAt = 0;
+        return;
+    }
+    if (CONFIG.waveRotateIntervalSec > 0) {
+        if (S.waveNextAt === 0) S.waveNextAt = t + Math.round(CONFIG.waveRotateIntervalSec * 1000);
+        else if (t >= S.waveNextAt) {
+            S.waveNextAt = t + Math.round(CONFIG.waveRotateIntervalSec * 1000);
+            if (t - S.lastWaveSwitchAt >= CONFIG.waveRotateMinGapMs) rotateWave(t);
+        }
+    } else {
+        S.waveNextAt = 0;
+    }
+    if (S.waveSwitchAt && t >= S.waveSwitchAt) {
+        S.waveSwitchAt = 0;
+        if (t - S.lastWaveSwitchAt >= CONFIG.waveRotateMinGapMs) rotateWave(t);
+    }
+}
+
 function keepPulse(t) {
     if (!CONFIG.burstEnabled) return;
     if (t >= S.chargeUntil) return;
@@ -1500,6 +1573,8 @@ function engineTick(t, dtMs) {
         return;
     }
 
+    tickWaveRotate(t);
+
     /* 低于停止线：完全停手（血回来了会自动恢复） */
     if (isHpTooLow()) {
         if (S.energy > 0 || S.strength > 0 || S.chargeUntil > 0) {
@@ -1515,7 +1590,7 @@ function engineTick(t, dtMs) {
         S.energy = Math.min(S.energy + pa, energyCapValue());
         S.lastAddAmount = pa;
         S.lastAddAt = t;
-        if (CONFIG.randomWaveform && WAVE_IDS.length) {
+        if (CONFIG.randomWaveform && CONFIG.waveRotateMode === 'off' && WAVE_IDS.length) {
             S.waveOverride = WAVE_IDS[Math.floor(Math.random() * WAVE_IDS.length)];
         }
         if (S.pendingBurstSec > 0) {
@@ -1893,6 +1968,12 @@ function setSetting(key, raw, save, quiet) {
         key === 'pulseLeadMs') {
         S.nextPulseAt = 0;
     }
+    if (key === 'waveform') {
+        S.waveHits = 0;              // 手动选了波形，轮换重新计数
+        S.waveSwitchAt = 0;
+        S.lastWaveSwitchAt = nowMs();
+    }
+    if (key === 'waveRotateIntervalSec' || key === 'waveRotateMode') S.waveNextAt = 0;
     if (save) saveConfig();
     if (!quiet) chat('[DG-LAB] ' + def.cn + ' = ' + v);
     log('设置', key, '=', v);
@@ -2305,6 +2386,12 @@ function drawPanel() {
                 (t < S.zeroHoldUntil ? '　归零静默中 ' + round1((S.zeroHoldUntil - t) / 1000) + ' 秒' : ''));
             UI.text('状态：' + (CONFIG.enabled ? (S.paused ? '已暂停' : '运行中') : '已关闭') +
                 '　通道：' + CONFIG.channel);
+            if (CONFIG.waveRotateMode !== 'off') {
+                var wIdx = WAVE_IDS.indexOf(CONFIG.waveform);
+                UI.text('波形轮换：' + (CONFIG.waveRotateMode === 'sequence' ? '顺序' : '随机') +
+                    '（第 ' + (wIdx < 0 ? 1 : wIdx + 1) + '/' + WAVE_IDS.length + ' 种）' +
+                    (S.waveSwitchAt ? '　' + round1((S.waveSwitchAt - t) / 1000) + ' 秒后换' : ''));
+            }
             if (S.pairingUrl) UI.text('设备连接地址：' + S.pairingUrl);
             if (S.lastError) UI.text('最近错误：' + S.lastError);
             UI.separator();
