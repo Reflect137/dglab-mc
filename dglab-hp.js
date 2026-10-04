@@ -1534,7 +1534,10 @@ function tickWaveRotate(t) {
         if (S.waveNextAt === 0) S.waveNextAt = t + Math.round(CONFIG.waveRotateIntervalSec * 1000);
         else if (t >= S.waveNextAt) {
             S.waveNextAt = t + Math.round(CONFIG.waveRotateIntervalSec * 1000);
-            if (t - S.lastWaveSwitchAt >= CONFIG.waveRotateMinGapMs) rotateWave(t);
+            if (t - S.lastWaveSwitchAt >= CONFIG.waveRotateMinGapMs) {
+                S.waveSwitchAt = 0;    // 定时轮换已经换了，取消待处理的延迟切换，避免同一刻连换两次
+                rotateWave(t);
+            }
         }
     } else {
         S.waveNextAt = 0;
