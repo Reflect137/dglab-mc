@@ -4,28 +4,32 @@
 
 ## 装
 
-先装 Termux。去[GitHub Releases](https://github.com/termux/termux-app/releases) 里安装带 `universal` 的那个 apk。
+先装 Termux：去 [F-Droid](https://f-droid.org/) 搜 Termux 装，或者下 [GitHub Releases](https://github.com/termux/termux-app/releases) 里带 `universal` 的 apk。应用商店里那个是停更旧版，`pkg` 会报错。
 
-打开 Termux，粘这一行：
+打开 Termux，粘这一行（**重复粘也没事**，会自动更新）：
 
 ```bash
-pkg update -y && pkg install -y git nodejs && git clone --depth 1 https://github.com/Reflect137/dglab-mc ~/dglab-mc && bash ~/dglab-mc/install.sh
+pkg update -y && pkg install -y git nodejs && (git -C ~/dglab-mc pull --ff-only 2>/dev/null || git clone --depth 1 https://github.com/Reflect137/dglab-mc ~/dglab-mc) && bash ~/dglab-mc/install.sh
 ```
 
-（这条走 git，永远拿到最新版。不想装 git 的话用镜像那条，见下。）
-
-装完**敲 `dglab` 启动中继**。换端口 `dglab --port 8888`。
+装完**敲 `dglab` 启动中继**。换端口 `dglab --port 8888`。以后想升级，把上面那一行再粘一次，或者在项目目录里跑 `bash install.sh --update`。
 
 <details>
-<summary>镜像下载（不装 git 的替代方案）</summary>
+<summary>不用 git 的下载方式（国内 raw 域名不通时也能用）</summary>
 
 ```bash
-pkg update -y && pkg install -y curl && bash <(curl -fsSL https://cdn.jsdelivr.net/gh/Reflect137/dglab-mc@main/install.sh)
+pkg update -y && pkg install -y curl git nodejs && curl -fsSL https://cdn.jsdelivr.net/gh/Reflect137/dglab-mc@main/install.sh -o /tmp/dglab-install.sh && bash /tmp/dglab-install.sh
 ```
 
-`raw.githubusercontent.com` 在国内经常连不上，所以走的 jsDelivr 镜像。注意这个镜像对分支有最多 12 小时缓存，刚更新完可能还是旧版；要立刻拿最新版就用 git 那条，或者把链接里的 `@main` 换成具体提交号（`@960ebc9` 这样）。
+这条走 jsDelivr 镜像。两点注意：装的过程照样要用 git（`install.sh` 用它拉项目）；镜像对分支有最多 12 小时缓存，刚更新完可能还是旧版，要最新的就用上面 git 那条。
 
 </details>
+
+接着做一次（只需要一次，让 Termux 能读写手机存储，弹窗点允许）：
+
+```bash
+termux-setup-storage
+```
 
 ## 用
 
@@ -78,11 +82,23 @@ bash ~/dglab-mc/tools/get-game-script.sh      # 存到 /sdcard/Download/
 
 中继那边的日志能看出配对情况：脚本连上是 `新 WebSocket 连接：mc-coyote`，APP 连上是 `新 WebSocket 连接：<一串id>，目标：mc-coyote`，配好是 `配对成功`。
 
+## 常用命令
+
+```bash
+dglab                       # 启动中继（默认 9999，只允许本机连）
+dglab --port 8888           # 换端口
+dglab --verbose             # 打印每条协议消息，排查用
+bash install.sh --check     # 只检查环境
+bash install.sh --update    # 更新到最新版
+bash tools/get-game-script.sh   # 把游戏脚本存到 /sdcard/Download/
+```
+
 ## 说明
 
 - 中继是自己重写的 DG-LAB V3 服务端，纯 Node 零依赖，行为跟官方 `wss://ws.dungeon-lab.cn/` 比对过，强度、波形、回执格式都对得上。所以把地址换成官方那条也能用。
 - 内置的 11 组波形数据来自 [dglab-kit](https://github.com/dungeonlab-open/dglab-kit)，所以这个项目跟着用 GPL-3.0。
 - 只有一台手机的话，中继、游戏、APP 都在本机，走 127.0.0.1，不用联网。
+- **默认只监听本机**（`127.0.0.1`），中继没有任何密码，所以别随便改成 `--host 0.0.0.0`——那等于把设备控制权交给同一个 Wi-Fi 下的所有人。确实要用电脑跑中继给手机连，再改，并清楚这个风险。
 - 先小后大。第一次把每点伤害加电设 1、强度上限设 10 试手感。电极别贴心脏、脖子、头部。
 
 ## 改代码的话

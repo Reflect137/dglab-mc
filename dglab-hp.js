@@ -550,7 +550,7 @@ var SETTING_DEFS = [
     { key: 'waveRotateIntervalSec', cn: '定时轮换秒数', group: '波形', type: 'float', min: 0, max: 600, step: 5 },
     { key: 'waveRotateDelayMs', cn: '切换延迟', group: '波形', type: 'int', min: 0, max: 10000 },
     { key: 'waveRotateMinGapMs', cn: '切换最小间隔', group: '波形', type: 'int', min: 0, max: 60000 },
-    { key: 'pulseCooldownMs', cn: '波形重发间隔', group: '波形', type: 'int', min: 0, max: 10000 },
+    { key: 'pulseCooldownMs', cn: '受伤波形冷却', group: '波形', type: 'int', min: 0, max: 10000 },
     { key: 'pulseLeadMs', cn: '续波形提前量', group: '波形', type: 'int', min: 0, max: 2000 },
 
     { key: 'manualZeroHoldMs', cn: '归零后静默', group: '安全', type: 'int', min: 0, max: 10000, core: true },
@@ -648,7 +648,15 @@ function loadConfig() {
             else if (def.type === 'int') v = MOD.sp.getInt(k);
             else if (def.type === 'float') v = MOD.sp.getFloat(k);
             else v = MOD.sp.getString(k);
-            if (v !== null && v !== undefined && typeof v !== 'object') CONFIG[def.key] = v;
+            if (v !== null && v !== undefined && typeof v !== 'object') {
+                if (def.type === 'int' || def.type === 'float') {
+                    var n = Number(v);
+                    if (isNaN(n)) n = DEFAULT_CONFIG[def.key];
+                    CONFIG[def.key] = clamp(n, def.min, def.max);   // 越界值会让功能失效（例如迟到 1e9 毫秒的切换）
+                } else if (v !== '') {
+                    CONFIG[def.key] = v;
+                }
+            }
         } catch (e) {
             log('读取设置失败', def.key, e);
         }
@@ -706,6 +714,7 @@ var S = {
     lastBurstAt: -1e9,    // 上次触发波形的时间
     lastPulseAt: 0,       // 上次真正发出波形的时间
     waveOverride: '',     // 随机波形时这一次用的波形
+    waveNow: '',          // 轮换当前用的波形（只存在内存里，不写 sp）
     waveHits: 0,          // 距离上次轮换累计的受伤次数
     waveSwitchAt: 0,      // 延迟轮换的到点时间（0 = 没有待切换）
     waveNextAt: 0,        // 定时轮换的下次时间
@@ -735,8 +744,9 @@ var S = {
 function channelPlan() {
     var ch = String(CONFIG.channel || 'A').toUpperCase();
     var out = [];
-    var waveA = CONFIG.waveform;
-    var waveB = CONFIG.bWaveform || CONFIG.waveform;   // 右路可单独设波形
+    var mainWave = S.waveNow || CONFIG.waveform;       // 轮换中的波形优先
+    var waveA = mainWave;
+    var waveB = CONFIG.bWaveform || mainWave;          // 右路可单独设波形
     if (ch === 'B') {
         out.push({ letter: 'B', scale: 1, offset: 0, wave: waveB });
     } else if (ch === 'AB') {
@@ -849,17 +859,23 @@ var DG = {
         this.sentStrength = -1;
         this.pendingStrength = null;
         try {
+            /* 回调都要认领自己的 socket：重复「连接」时旧 socket 的关闭事件
+               会把新连接打掉（onClosed 里会清 this.ws），之后所有下发静默失败 */
             ws.setOnOpenListener(function () {
+                if (self.ws !== ws) return;
                 self.state = 'waiting';
                 logAlways('已连接中继', url);
             });
             ws.setOnTextMessageListener(function (msg) {
+                if (self.ws !== ws) return;
                 self.onText(msg);
             });
             ws.setOnClosedListener(function (code, reason) {
+                if (self.ws !== ws) return;
                 self.onClosed(code, reason);
             });
             ws.setOnErrorListener(function (err) {
+                if (self.ws !== ws) return;
                 S.lastError = 'WebSocket 错误: ' + err;
                 logAlways(S.lastError);
             });
@@ -957,11 +973,11 @@ var DG = {
         var plan = channelPlan();
         var ok = false;
         var time = Math.max(1, Math.round(sec));
-        var fallback = WAVE_FRAMES[CONFIG.waveform] || WAVE_FRAMES.BUBBLE;
+        var fallback = WAVE_FRAMES[S.waveNow || CONFIG.waveform] || WAVE_FRAMES.BUBBLE;
         for (var i = 0; i < plan.length; i++) {
             var letter = plan[i].letter;
             var followMain = (letter === 'A') || !CONFIG.bWaveform;
-            var waveId = (S.waveOverride && followMain) ? S.waveOverride : plan[i].wave;
+            var waveId = (CONFIG.randomWaveform && S.waveOverride && followMain) ? S.waveOverride : plan[i].wave;
             var frames = WAVE_FRAMES[waveId] || fallback;
             if (!frames || !frames.length) continue;
             frames = resampleFrames(frames, CONFIG.waveSpeed);
@@ -1258,6 +1274,9 @@ function resetOutput(reason, holdMs) {
     S.nextPulseAt = 0;
     S.comboCount = 0;
     S.waveOverride = '';
+    S.waveSwitchAt = 0;   // 别把上个世界/归零前排队的切换带过来
+    S.waveHits = 0;
+    S.waveNow = '';
     S.secondEnergy = 0;
     S.pendingAdd = 0;
     S.pendingBurstSec = 0;
@@ -1502,8 +1521,8 @@ function onHeal(amount, t) {
 /* 波形轮换：顺序取下一个，或随机取一个不同的 */
 function rotateWave(t) {
     var mode = CONFIG.waveRotateMode;
-    if ((mode !== 'sequence' && mode !== 'random') || !WAVE_IDS.length) return false;
-    var idx = WAVE_IDS.indexOf(CONFIG.waveform);
+    if ((mode !== 'sequence' && mode !== 'random') || WAVE_IDS.length < 2) return false;
+    var idx = WAVE_IDS.indexOf(S.waveNow || CONFIG.waveform);
     if (idx < 0) idx = 0;
     var next;
     if (mode === 'random') {
@@ -1514,11 +1533,12 @@ function rotateWave(t) {
     } else {
         next = (idx + 1) % WAVE_IDS.length;
     }
-    CONFIG.waveform = WAVE_IDS[next];
+    S.waveNow = WAVE_IDS[next];
+    S.waveOverride = '';       // 轮换换掉的波形不能被旧的「随机波形」结果盖住
     S.nextPulseAt = 0;         // 立刻用新波形，不等当前这段放完
     S.waveHits = 0;
     S.lastWaveSwitchAt = t;
-    log('波形轮换 →', CONFIG.waveform);
+    log('波形轮换 →', S.waveNow);
     return true;
 }
 
@@ -1537,6 +1557,9 @@ function tickWaveRotate(t) {
             if (t - S.lastWaveSwitchAt >= CONFIG.waveRotateMinGapMs) {
                 S.waveSwitchAt = 0;    // 定时轮换已经换了，取消待处理的延迟切换，避免同一刻连换两次
                 rotateWave(t);
+            } else if (!S.waveSwitchAt) {
+                /* 被最小间隔挡住：不丢弃，等间隔一到就换（和受伤触发的语义一致） */
+                S.waveSwitchAt = S.lastWaveSwitchAt + CONFIG.waveRotateMinGapMs;
             }
         }
     } else {
@@ -1642,7 +1665,8 @@ function engineTick(t, dtMs) {
         S.lastHp !== null && S.lastMaxHp > 0 &&
         S.lastHp > 0.01 && S.lastHp < S.lastMaxHp - 0.01) {
         var floorE = Math.min(CONFIG.hurtFloorEnergy, energyCapValue());
-        if (S.energy < floorE) S.energy = floorE;
+        if (floorE < CONFIG.minOutputEnergy) floorE = 0;   // 低于最低输出就彻底停，别把电又抬回来
+        if (floorE > 0 && S.energy < floorE) S.energy = floorE;
     }
 
     /* 电量没清就一直续波形（真正「一直电」） */
@@ -1972,10 +1996,14 @@ function setSetting(key, raw, save, quiet) {
         S.nextPulseAt = 0;
     }
     if (key === 'waveform') {
-        S.waveHits = 0;              // 手动选了波形，轮换重新计数
+        S.waveNow = '';              // 玩家手动选的优先，轮换状态作废
+        S.waveHits = 0;
         S.waveSwitchAt = 0;
+        S.waveNextAt = 0;            // B8：定时轮换从这一刻重新计时
         S.lastWaveSwitchAt = nowMs();
     }
+    if (key === 'randomWaveform' && !v) S.waveOverride = '';
+    if (key === 'waveRotateMode' && v === 'off') S.waveNow = '';
     if (key === 'waveRotateIntervalSec' || key === 'waveRotateMode') S.waveNextAt = 0;
     if (save) saveConfig();
     if (!quiet) chat('[DG-LAB] ' + def.cn + ' = ' + v);
@@ -2390,10 +2418,10 @@ function drawPanel() {
             UI.text('状态：' + (CONFIG.enabled ? (S.paused ? '已暂停' : '运行中') : '已关闭') +
                 '　通道：' + CONFIG.channel);
             if (CONFIG.waveRotateMode !== 'off') {
-                var wIdx = WAVE_IDS.indexOf(CONFIG.waveform);
+                var wIdx = WAVE_IDS.indexOf(S.waveNow || CONFIG.waveform);
                 UI.text('波形轮换：' + (CONFIG.waveRotateMode === 'sequence' ? '顺序' : '随机') +
                     '（第 ' + (wIdx < 0 ? 1 : wIdx + 1) + '/' + WAVE_IDS.length + ' 种）' +
-                    (S.waveSwitchAt ? '　' + round1((S.waveSwitchAt - t) / 1000) + ' 秒后换' : ''));
+                    (S.waveSwitchAt > t ? '　' + round1((S.waveSwitchAt - t) / 1000) + ' 秒后换' : ''));
             }
             if (S.pairingUrl) UI.text('设备连接地址：' + S.pairingUrl);
             if (S.lastError) UI.text('最近错误：' + S.lastError);

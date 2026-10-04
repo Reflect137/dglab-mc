@@ -19,16 +19,25 @@ TARGET="${1:-}"
 if [ -z "$TARGET" ]; then
     if [ -d /sdcard/Download ]; then
         TARGET="/sdcard/Download/dglab-hp.js"
+    elif [ -d /sdcard ]; then
+        TARGET="/sdcard/dglab-hp.js"
     else
-        TARGET="$HERE/dglab-hp.js"
+        echo "找不到 /sdcard —— Termux 还没有存储权限。" >&2
+        echo "先在 Termux 里执行一次： termux-setup-storage （弹窗点允许），再重跑这个脚本。" >&2
+        echo "或者手动指定保存位置，例如： bash tools/get-game-script.sh /某个目录/" >&2
+        exit 1
     fi
 elif [ -d "$TARGET" ]; then
     TARGET="${TARGET%/}/dglab-hp.js"
 fi
 
 # 优先用仓库里已有的那份（版本一定一致），没有就联网下载
-if [ -f "$HERE/dglab-hp.js" ]; then
-    cp "$HERE/dglab-hp.js" "$TARGET" || { echo "复制失败：$TARGET"; exit 1; }
+SRC_FILE="$HERE/dglab-hp.js"
+if [ -f "$SRC_FILE" ] && [ "$(cd "$(dirname "$SRC_FILE")" && pwd)/$(basename "$SRC_FILE")" = "$(cd "$(dirname "$TARGET")" 2>/dev/null && pwd || echo '')/$(basename "$TARGET")" ]; then
+    echo "脚本本来就在这个位置，没有复制：$TARGET"
+    SRC="本地仓库（原地）"
+elif [ -f "$SRC_FILE" ]; then
+    cp "$SRC_FILE" "$TARGET" || { echo "复制失败：$TARGET"; exit 1; }
     SRC="本地仓库"
 else
     if ! command -v curl >/dev/null 2>&1; then
@@ -45,4 +54,4 @@ echo
 echo "下一步："
 echo "  1) 打开文件管理器，把 dglab-hp.js 放进游戏的脚本目录"
 echo "     （和 TimeUnity.js / zuoai_目标框*.js 放在一起）"
-echo "  2) 重进游戏世界，聊天栏输入 !dg pair 查看设备该连的地址"
+echo "  2) 重进游戏世界。面板「配对信息」按钮里能看到 APP 该连的地址"

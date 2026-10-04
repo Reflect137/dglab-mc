@@ -1,11 +1,12 @@
-#!/data/data/com.termux/files/usr/bin/env bash
+#!/usr/bin/env bash
 # ============================================================================
 #  start-termux.sh —— 在 Termux（安卓手机）里一键启动 DG-LAB 中继
 #
 #  用法：
-#      bash tools/start-termux.sh            # 默认端口 9999
-#      bash tools/start-termux.sh 12345      # 指定端口
-#      bash tools/start-termux.sh 9999 -v    # 打开逐条消息日志
+#      bash tools/start-termux.sh                  # 默认端口 9999，只允许本机连
+#      bash tools/start-termux.sh --port 8888      # 指定端口
+#      bash tools/start-termux.sh 8888 -v          # 旧写法也认，加逐条消息日志
+#      bash tools/start-termux.sh --host 0.0.0.0   # 允许别的设备连（无密码，注意风险）
 #
 #  首次使用：
 #      pkg install nodejs
@@ -13,9 +14,19 @@
 # ============================================================================
 set -euo pipefail
 
-PORT="${1:-9999}"
-shift || true
-EXTRA_ARGS=("$@")
+PORT="9999"
+HOST="127.0.0.1"
+EXTRA_ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --port)   [ $# -ge 2 ] || { echo "--port 需要端口号" >&2; exit 2; }; PORT="$2"; shift 2 ;;
+        --port=*) PORT="${1#--port=}"; shift ;;
+        --host)   [ $# -ge 2 ] || { echo "--host 需要地址" >&2; exit 2; }; HOST="$2"; shift 2 ;;
+        --host=*) HOST="${1#--host=}"; shift ;;
+        --*)      EXTRA_ARGS+=("$1"); shift ;;
+        *)        PORT="$1"; shift ;;      # 兼容旧的「第一个参数是端口」写法
+    esac
+done
 
 # 脚本所在目录的上一级 = 项目根目录
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,7 +54,10 @@ if command -v termux-setup-storage >/dev/null 2>&1 && [ ! -d "$HOME/storage" ]; 
 fi
 
 echo "[start] 项目目录: $ROOT"
-echo "[start] 启动中继，端口 $PORT（Ctrl+C 退出）"
+echo "[start] 启动中继，端口 $PORT，监听 $HOST（Ctrl+C 退出）"
 echo
 
-exec node "$RELAY" --port "$PORT" --host 0.0.0.0 ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
+if [ "$HOST" != "127.0.0.1" ]; then
+    echo "[start] 注意：监听 $HOST，同网络的其他设备都能连（无密码）"
+fi
+exec node "$RELAY" --port "$PORT" --host "$HOST" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}

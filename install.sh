@@ -1,20 +1,14 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  DG-LAB × 我的世界 · 一键安装 / 启动脚本
+#  DG-LAB × 我的世界 · 安装脚本
 #
-#  给别人的用法（Termux 里粘一行就行，只装不启动）：
-#      bash <(curl -fsSL https://cdn.jsdelivr.net/gh/Reflect137/dglab-mc@main/install.sh)
-#  装完敲 dglab 启动。想装完直接启动就加 --run。
-#
-#  或者先克隆再跑：
-#      git clone https://github.com/Reflect137/dglab-mc ~/dglab-mc
-#      bash ~/dglab-mc/install.sh
-#
-#  其它用法：
+#  用法：
+#      bash install.sh                装好，然后敲 dglab 启动（默认）
 #      bash install.sh --run          装完立刻启动
 #      bash install.sh --check        只检查环境，不装不改
-#      bash install.sh --update       更新到最新版
-#      bash install.sh --port 8888    配合 --run 指定端口
+#      bash install.sh --update       更新到最新版（在仓库目录里也能用）
+#      bash install.sh --port 8888    配合 --run 指定端口（默认 9999）
+#      bash install.sh --host 0.0.0.0 允许别的设备连（默认只绑本机 127.0.0.1）
 #
 #  支持：Termux（安卓手机）、Debian/Ubuntu、其它带 pkg/apt/apk 的 Linux
 # ============================================================================
@@ -23,9 +17,32 @@ set -u
 REPO="${DGLAB_REPO:-https://github.com/Reflect137/dglab-mc.git}"
 DIR="${DGLAB_DIR:-$HOME/dglab-mc}"
 PORT=""
+HOST="127.0.0.1"
 DO_CHECK=0
 DO_UPDATE=0
 DO_RUN=0
+
+say()  { printf '%s\n' "$*"; }
+ok()   { printf '  ✅ %s\n' "$*"; }
+warn() { printf '  ⚠️  %s\n' "$*"; }
+die()  { printf '  ❌ %s\n' "$*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+usage() {
+    cat <<'USAGE'
+DG-LAB × 我的世界 · 安装脚本
+
+  bash install.sh                装好，然后敲 dglab 启动（默认）
+  bash install.sh --run          装完立刻启动
+  bash install.sh --check        只检查环境，不装不改
+  bash install.sh --update       更新到最新版
+  bash install.sh --port 8888    配合 --run 指定端口（默认 9999）
+  bash install.sh --host 0.0.0.0 允许别的设备连（默认只绑本机）
+  bash install.sh -h             显示这段帮助
+
+环境变量：DGLAB_DIR 安装目录（默认 ~/dglab-mc）、DGLAB_REPO 仓库地址
+USAGE
+}
 
 # ---------------------------------------------------------------- 参数
 while [ $# -gt 0 ]; do
@@ -33,21 +50,30 @@ while [ $# -gt 0 ]; do
         --check)   DO_CHECK=1; DO_RUN=0; shift ;;
         --update)  DO_UPDATE=1; shift ;;
         --run|-r)  DO_RUN=1; shift ;;
-        --port)    PORT="${2:-}"; shift 2 ;;
-        --port=*)  PORT="${1#--port=}"; shift ;;
-        -h|--help)
-            sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
-            exit 0 ;;
-        *) echo "未知参数：$1（用 --help 看用法）"; exit 2 ;;
+        --port)
+            [ $# -ge 2 ] || { usage >&2; die "--port 需要一个端口号，例如 --port 8888"; }
+            PORT="$2"; shift 2 ;;
+        --port=*)
+            PORT="${1#--port=}"
+            [ -n "$PORT" ] || { usage >&2; die "--port= 后面要有端口号"; }
+            shift ;;
+        --host)
+            [ $# -ge 2 ] || { usage >&2; die "--host 需要一个地址，例如 --host 0.0.0.0"; }
+            HOST="$2"; shift 2 ;;
+        --host=*)
+            HOST="${1#--host=}"
+            [ -n "$HOST" ] || { usage >&2; die "--host= 后面要有地址"; }
+            shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; die "未知参数：$1" ;;
     esac
 done
 
-say()  { printf '%s\n' "$*"; }
-ok()   { printf '  ✅ %s\n' "$*"; }
-warn() { printf '  ⚠️  %s\n' "$*"; }
-die()  { printf '  ❌ %s\n' "$*" >&2; exit 1; }
-
-have() { command -v "$1" >/dev/null 2>&1; }
+case "${PORT:-}" in
+    '' ) ;;
+    *[!0-9]* ) die "端口只能是数字：$PORT" ;;
+    * ) [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "端口超出范围：$PORT" ;;
+esac
 
 # ---------------------------------------------------------------- 环境探测
 IS_TERMUX=0
@@ -64,6 +90,14 @@ elif [ -d "$HOME/.local/bin" ] || mkdir -p "$HOME/.local/bin" 2>/dev/null; then
 else
     PLATFORM="Linux"
     BIN_DIR="/usr/local/bin"
+fi
+
+# 是不是在项目目录里直接跑的
+SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo '')"
+IN_REPO=0
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/dglab-hp.js" ] && [ -d "$SCRIPT_DIR/tools" ]; then
+    IN_REPO=1
+    DIR="$SCRIPT_DIR"
 fi
 
 say ""
@@ -83,8 +117,14 @@ if [ "$DO_CHECK" = "1" ]; then
         warn "没装 Node.js（安装时会自动装）"
     fi
     have git && ok "git 已安装" || warn "没装 git（安装时会自动装）"
-    have curl && ok "curl 已安装" || warn "没装 curl（下载游戏脚本时要用）"
-    [ -d "$DIR/.git" ] && ok "仓库已存在：$DIR" || warn "仓库还不存在：$DIR"
+    have curl && ok "curl 已安装" || warn "没装 curl（只是命令行下载文件方便，安装本身不需要）"
+    if [ "$IN_REPO" = "1" ]; then
+        ok "就在项目目录里：$DIR"
+    elif [ -d "$DIR/.git" ]; then
+        ok "已有仓库：$DIR"
+    else
+        warn "还没有项目文件：$DIR（安装时会克隆）"
+    fi
     [ -w "$BIN_DIR" ] && ok "可写目录：$BIN_DIR（能装 dglab 命令）" || warn "$BIN_DIR 不可写"
     say ""
     say "检查完毕。直接运行 bash install.sh 即可安装。"
@@ -120,75 +160,106 @@ if [ "${NODE_MAJOR:-0}" -lt 18 ] 2>/dev/null; then
     warn "Node $(node -v) 版本偏低，建议升级到 18+（脚本要求 ≥18）"
 fi
 ok "Node.js $(node -v)"
-have git && ok "git 已就绪" || warn "没有 git（安装完就没法 --update，但可以继续用）"
+have git && ok "git 已就绪" || warn "没有 git（装完还能用，但没法 --update）"
 
 # ---------------------------------------------------------------- 取代码
 say ""
 say "[2/4] 获取项目文件"
-SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo '')"
-if [ -f "$SCRIPT_DIR/dglab-hp.js" ] && [ -d "$SCRIPT_DIR/tools" ]; then
-    # 已经在本仓库里运行（克隆后执行的）
-    DIR="$SCRIPT_DIR"
+if [ "$IN_REPO" = "1" ]; then
     ok "用的就是当前目录：$DIR"
+    if [ "$DO_UPDATE" = "1" ]; then
+        if [ -d "$DIR/.git" ] && have git; then
+            say "  更新…"
+            git -C "$DIR" pull --ff-only && ok "已更新到最新版" || warn "更新失败（离线？本地有改动？），继续用当前版本"
+        else
+            warn "这个目录不是 git 仓库，没法自动更新（手动下载新版覆盖即可）"
+        fi
+    fi
 elif [ -d "$DIR/.git" ]; then
     if have git; then
-        say "  更新已有仓库…"
-        git -C "$DIR" pull --ff-only >/dev/null 2>&1 && ok "已更新到最新版" || warn "更新失败（离线？），继续用现有版本"
+        if [ "$DO_UPDATE" = "1" ]; then
+            say "  更新已有仓库…"
+            git -C "$DIR" pull --ff-only && ok "已更新到最新版" || warn "更新失败（离线？），继续用现有版本"
+        else
+            ok "已有仓库：$DIR（要更新加 --update）"
+        fi
+    else
+        warn "已有仓库但没有 git，跳过更新：$DIR"
     fi
 else
-    have git || die "需要 git 才能下载，请先：pkg install -y git"
+    have git || die "需要 git 才能下载，请先 pkg install -y git；也可以手动下载 ZIP 解压后，在该目录里运行 bash install.sh"
+    if [ -d "$DIR" ] && [ -n "$(ls -A "$DIR" 2>/dev/null)" ]; then
+        die "$DIR 已存在，而且不是本项目的 git 仓库。先把它改名或清空再装，例如：mv \"$DIR\" \"$DIR.old\""
+    fi
     say "  从 $REPO 克隆到 $DIR …"
-    git clone --depth 1 "$REPO" "$DIR" >/dev/null 2>&1 || die "克隆失败（检查网络，或仓库地址）"
+    if ! clone_err="$(git clone --depth 1 "$REPO" "$DIR" 2>&1)"; then
+        say "$clone_err" >&2
+        die "克隆失败。检查网络；或者手动下载 ZIP 解压后在该目录里运行 bash install.sh"
+    fi
     ok "已下载到 $DIR"
 fi
-[ -f "$DIR/tools/dglab-relay.js" ] || die "没找到 tools/dglab-relay.js，项目不完整"
+[ -f "$DIR/tools/dglab-relay.js" ] || die "没找到 $DIR/tools/dglab-relay.js，项目不完整"
 
 # ---------------------------------------------------------------- 装 dglab 命令
 say ""
 say "[3/4] 安装 dglab 命令"
 WRAPPER="$BIN_DIR/dglab"
-if [ -w "$BIN_DIR" ]; then
-    cat > "$WRAPPER" <<EOF
+if [ ! -w "$BIN_DIR" ]; then
+    warn "$BIN_DIR 不可写，跳过（手动启动：node $DIR/tools/dglab-relay.js --port 9999）"
+elif [ -d "$WRAPPER" ]; then
+    warn "$WRAPPER 是个目录，没动它（手动启动：node $DIR/tools/dglab-relay.js --port 9999）"
+elif cat > "$WRAPPER" <<EOF
 #!/usr/bin/env sh
-# 由 install.sh 生成：以后直接敲 dglab 就能启动中继
-exec node "$DIR/tools/dglab-relay.js" "\$@"
+# 由 install.sh 生成。项目被移动或改名后，重新跑一次 install.sh 即可。
+DIR="$DIR"
+if [ ! -f "\$DIR/tools/dglab-relay.js" ]; then
+    echo "找不到 \$DIR/tools/dglab-relay.js（项目被移动或删除了？）" >&2
+    echo "重新跑一次安装脚本即可修复：bash \$DIR/install.sh" >&2
+    exit 1
+fi
+command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock
+exec node "\$DIR/tools/dglab-relay.js" "\$@"
 EOF
-    chmod +x "$WRAPPER" 2>/dev/null
+then
+    chmod +x "$WRAPPER" 2>/dev/null || warn "chmod +x $WRAPPER 失败，可能要用 sh $WRAPPER 启动"
     ok "已生成 $WRAPPER（以后敲 dglab 即可启动）"
     case ":$PATH:" in
         *":$BIN_DIR:"*) ;;
         *) warn "$BIN_DIR 不在 PATH 里，可能要重开终端或手动加 PATH" ;;
     esac
 else
-    warn "$BIN_DIR 不可写，跳过（可以用 bash $DIR/tools/start-termux.sh 启动）"
+    warn "写 $WRAPPER 失败（磁盘满或只读？），手动启动：node $DIR/tools/dglab-relay.js --port 9999"
 fi
 
-# 给游戏用的脚本下载助手
-HELPER="$DIR/tools/get-game-script.sh"
-if [ ! -f "$HELPER" ]; then
-    warn "缺少 tools/get-game-script.sh（旧版本？）"
-fi
+# ---------------------------------------------------------------- 完成
+RUN_PORT="${PORT:-9999}"
+SHOW_PORT=9999
+[ "$DO_RUN" = "1" ] && SHOW_PORT="$RUN_PORT"
 
-# ---------------------------------------------------------------- 启动
 say ""
 say "[4/4] 完成"
 say ""
 say "  ┌──────────────────────────────────────────────────────────┐"
 say "  │ 装好了。接下来：                                          │"
 say "  │ 1) 敲 dglab 启动中继（Ctrl+C 停止）                       │"
-say "  │ 2) 把 dglab-hp.js 放进游戏脚本目录                        │"
-say "  │ 3) DG-LAB APP → Socket 控制 → 连接下面这个地址：           │"
-say "  │      ws://127.0.0.1:${PORT:-9999}/mc-coyote                │"
+say "  │ 2) 把 dglab-hp.js 放进游戏的脚本目录                      │"
+say "  │ 3) DG-LAB APP → Socket 控制 → 连接：                      │"
+say "  │      ws://127.0.0.1:${SHOW_PORT}/mc-coyote                │"
 say "  └──────────────────────────────────────────────────────────┘"
 say ""
-say "  游戏脚本下载（手机浏览器直接打开也行）："
-say "    https://cdn.jsdelivr.net/gh/Reflect137/dglab-mc@main/dglab-hp.js"
-say "  或在 Termux 里执行："
-say "    bash $DIR/tools/get-game-script.sh        # 存到 /sdcard/Download/"
+say "  游戏脚本这样拿（存到 /sdcard/Download/）："
+say "    bash $DIR/tools/get-game-script.sh"
+say ""
+say "  其它：换端口 dglab --port 8888 ｜ 检查环境 bash install.sh --check"
+say "        更新版本 bash install.sh --update（在 $DIR 里跑）"
 say ""
 
 if [ "$DO_RUN" = "0" ]; then
-    say "现在敲 dglab 就能启动中继（换端口：dglab --port 8888）。"
+    if [ -n "$PORT" ]; then
+        say "注意：--port $PORT 只在配合 --run 时生效；敲 dglab 启动时想换端口用：dglab --port $PORT"
+        say ""
+    fi
+    say "现在敲 dglab 就能启动中继。"
     say ""
     exit 0
 fi
@@ -197,6 +268,10 @@ if have termux-wake-lock; then
     termux-wake-lock 2>/dev/null && say "已申请 termux-wake-lock（防止后台被杀）"
 fi
 
-say "启动中继，端口 ${PORT:-9999}（Ctrl+C 退出）…"
+if [ "$HOST" != "127.0.0.1" ] && [ "$HOST" != "localhost" ]; then
+    warn "监听 $HOST：同一个网络里的其他设备都能连到这个中继（无密码，别人可以控制你的设备）"
+fi
+
+say "启动中继：端口 ${RUN_PORT}，监听 ${HOST}（Ctrl+C 退出）…"
 say ""
-exec node "$DIR/tools/dglab-relay.js" --port "${PORT:-9999}" --host 0.0.0.0
+exec node "$DIR/tools/dglab-relay.js" --port "$RUN_PORT" --host "$HOST"

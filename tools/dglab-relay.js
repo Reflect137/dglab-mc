@@ -62,7 +62,9 @@ const MAX_LOG_MESSAGE = 4096;
 const MAX_EVENTS = 20000;
 
 const DEFAULT_PORT = 9999;
-const DEFAULT_HOST = '0.0.0.0';
+/* 默认只绑本机：这个中继没有任何鉴权，控制端 id 又是公开常量，
+ * 绑 0.0.0.0 等于把设备控制权交给同网络的所有人。要给别的设备连，显式 --host 0.0.0.0。 */
+const DEFAULT_HOST = '127.0.0.1';
 
 // 与参考实现一致的环境变量默认值
 const HEARTBEAT_MS = envNumber('HEARTBEAT_INTERVAL', 60_000);
@@ -727,6 +729,9 @@ class Relay extends EventEmitter {
         console.log(`[relay] listening ws://${this.host}:${this.port}`);
         if (!this.quiet) {
             console.log(`[relay] 手机内直连地址        : ws://127.0.0.1:${this.port}`);
+    if (this.host === '0.0.0.0' || this.host === '::') {
+        console.log('[relay] 注意：正在监听所有网卡，同网络的设备都能连（无密码）');
+    }
             console.log(`[relay] 控制端(游戏脚本)连接 : ws://127.0.0.1:${this.port}/?cid=mc-coyote`);
             console.log(`[relay] DG-LAB APP 连接地址  : ws://127.0.0.1:${this.port}/mc-coyote`);
             console.log('[relay] Termux 小贴士: 先执行 termux-wake-lock 可避免后台被系统杀掉');
