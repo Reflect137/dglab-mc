@@ -2,18 +2,19 @@
 # ============================================================================
 #  DG-LAB × 我的世界 · 一键安装 / 启动脚本
 #
-#  给别人的用法（Termux 里粘一行就行）：
-#      bash <(curl -fsSL https://raw.githubusercontent.com/Reflect137/dglab-mc/main/install.sh)
+#  给别人的用法（Termux 里粘一行就行，只装不启动）：
+#      bash <(curl -fsSL https://cdn.jsdelivr.net/gh/Reflect137/dglab-mc@main/install.sh)
+#  装完敲 dglab 启动。想装完直接启动就加 --run。
 #
 #  或者先克隆再跑：
 #      git clone https://github.com/Reflect137/dglab-mc ~/dglab-mc
 #      bash ~/dglab-mc/install.sh
 #
 #  其它用法：
+#      bash install.sh --run          装完立刻启动
 #      bash install.sh --check        只检查环境，不装不改
-#      bash install.sh --update       更新到最新版并重启
-#      bash install.sh --port 8888    指定端口启动
-#      bash install.sh --no-run       只安装 / 更新，不启动
+#      bash install.sh --update       更新到最新版
+#      bash install.sh --port 8888    配合 --run 指定端口
 #
 #  支持：Termux（安卓手机）、Debian/Ubuntu、其它带 pkg/apt/apk 的 Linux
 # ============================================================================
@@ -24,14 +25,14 @@ DIR="${DGLAB_DIR:-$HOME/dglab-mc}"
 PORT=""
 DO_CHECK=0
 DO_UPDATE=0
-DO_RUN=1
+DO_RUN=0
 
 # ---------------------------------------------------------------- 参数
 while [ $# -gt 0 ]; do
     case "$1" in
         --check)   DO_CHECK=1; DO_RUN=0; shift ;;
         --update)  DO_UPDATE=1; shift ;;
-        --no-run)  DO_RUN=0; shift ;;
+        --run|-r)  DO_RUN=1; shift ;;
         --port)    PORT="${2:-}"; shift 2 ;;
         --port=*)  PORT="${1#--port=}"; shift ;;
         -h|--help)
@@ -173,25 +174,22 @@ say ""
 say "[4/4] 完成"
 say ""
 say "  ┌──────────────────────────────────────────────────────────┐"
-say "  │ 接下来：                                                 │"
-say "  │ 1) 中继保持运行（Ctrl+C 停止）                            │"
+say "  │ 装好了。接下来：                                          │"
+say "  │ 1) 敲 dglab 启动中继（Ctrl+C 停止）                       │"
 say "  │ 2) 把 dglab-hp.js 放进游戏脚本目录                        │"
 say "  │ 3) DG-LAB APP → Socket 控制 → 连接下面这个地址：           │"
 say "  │      ws://127.0.0.1:${PORT:-9999}/mc-coyote                │"
 say "  └──────────────────────────────────────────────────────────┘"
 say ""
 say "  游戏脚本下载（手机浏览器直接打开也行）："
-say "    https://raw.githubusercontent.com/Reflect137/dglab-mc/main/dglab-hp.js"
+say "    https://cdn.jsdelivr.net/gh/Reflect137/dglab-mc@main/dglab-hp.js"
 say "  或在 Termux 里执行："
 say "    bash $DIR/tools/get-game-script.sh        # 存到 /sdcard/Download/"
 say ""
 
-if [ "$DO_UPDATE" = "1" ]; then
-    say "（--update 模式：已更新，下面继续启动）"
-fi
-
 if [ "$DO_RUN" = "0" ]; then
-    say "（--no-run：不启动。手动启动：dglab  或  bash $DIR/tools/start-termux.sh）"
+    say "现在敲 dglab 就能启动中继（换端口：dglab --port 8888）。"
+    say ""
     exit 0
 fi
 

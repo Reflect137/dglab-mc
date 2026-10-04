@@ -12,7 +12,7 @@
 # ============================================================================
 set -u
 
-URL="https://raw.githubusercontent.com/Reflect137/dglab-mc/main/dglab-hp.js"
+URL="https://cdn.jsdelivr.net/gh/Reflect137/dglab-mc@main/dglab-hp.js"
 HERE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || echo .)"
 
 TARGET="${1:-}"

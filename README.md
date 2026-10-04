@@ -9,10 +9,10 @@
 打开 Termux，粘这一行：
 
 ```bash
-pkg update -y && pkg install -y curl && bash <(curl -fsSL https://raw.githubusercontent.com/Reflect137/dglab-mc/main/install.sh)
+pkg update -y && pkg install -y curl && bash <(curl -fsSL https://cdn.jsdelivr.net/gh/Reflect137/dglab-mc@main/install.sh)
 ```
 
-没装 curl 就用 git 那条：
+这条走的是 jsDelivr 镜像（`raw.githubusercontent.com` 在国内经常连不上）。拉不动就换下面 git 那条：
 
 ```bash
 pkg update -y && pkg install -y git nodejs && git clone --depth 1 https://github.com/Reflect137/dglab-mc ~/dglab-mc && bash ~/dglab-mc/install.sh
@@ -25,7 +25,7 @@ pkg update -y && pkg install -y git nodejs && git clone --depth 1 https://github
 ## 用
 
 1. 郊狼主机和电极接好，手机开 DG-LAB APP
-2. Termux里输入dglab
+2. Termux里输入`dglab`
 3. 把 `dglab-hp.js` 放进跑路的脚本目录，进入游戏并执行脚本
 4. APP 里进 Socket 控制，地址填 `ws://127.0.0.1:9999/mc-coyote`
 
@@ -37,7 +37,7 @@ pkg update -y && pkg install -y git nodejs && git clone --depth 1 https://github
 bash ~/dglab-mc/tools/get-game-script.sh      # 存到 /sdcard/Download/
 ```
 
-或者手机浏览器打开 <https://raw.githubusercontent.com/Reflect137/dglab-mc/main/dglab-hp.js> 另存为。
+或者手机浏览器打开 <https://cdn.jsdelivr.net/gh/Reflect137/dglab-mc@main/dglab-hp.js> 另存为。
 
 ## 调参数
 
