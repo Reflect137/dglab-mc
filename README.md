@@ -1,7 +1,5 @@
 # 《我的世界》× DG-LAB
 
-在游戏里挨打就给郊狼加电。掉血越多强度越高，回满血清零，死了拉满，停手不回血就一直保持。
-
 ## 装
 
 手机上装好 Termux，粘这一行：
@@ -23,8 +21,9 @@ pkg update -y && pkg install -y git nodejs && git clone --depth 1 https://github
 ## 用
 
 1. 郊狼主机和电极接好，手机开 DG-LAB APP
-2. 把 `dglab-hp.js` 放进游戏的脚本目录（跟 `TimeUnity.js`、`zuoai_目标框*.js` 那些放一起），重进一次世界
-3. APP 里进 Socket 控制，地址填 `ws://127.0.0.1:9999/mc-coyote`
+2. Termux里输入dglab
+3. 把 `dglab-hp.js` 放进跑路的脚本目录，进入游戏并执行脚本
+4. APP 里进 Socket 控制，地址填 `ws://127.0.0.1:9999/mc-coyote`
 
 配对成功游戏里会弹一条消息，之后挨打就有电了。
 
