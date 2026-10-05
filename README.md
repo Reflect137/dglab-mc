@@ -49,6 +49,36 @@ bash ~/dglab-mc/tools/get-game-script.sh      # 存到 /sdcard/Download/
 
 或者手机浏览器打开 <https://cdn.jsdelivr.net/gh/Reflect137/dglab-mc@main/dglab-hp.js> 另存为。
 
+## 更新
+
+把「装」那一行**再粘一次**就是更新（它会自动拉最新版，不会重复克隆）：
+
+```bash
+pkg update -y && pkg install -y git nodejs && (git -C ~/dglab-mc pull --ff-only 2>/dev/null || git clone --depth 1 https://github.com/Reflect137/dglab-mc ~/dglab-mc) && bash ~/dglab-mc/install.sh
+```
+
+已经装过的用这条更短：
+
+```bash
+bash ~/dglab-mc/install.sh --update
+```
+
+`install.sh` 只更新文件、**不会启动中继**，更新完自己敲 `dglab` 启动（这行也可以像上面那样直接接在命令后面）。
+
+游戏脚本也要一起换新的，不然新功能用不上：
+
+```bash
+bash ~/dglab-mc/tools/get-game-script.sh     # 然后覆盖进游戏的脚本目录，重进世界
+```
+
+> 如果 `--update` 没反应（很早以前克隆的版本，里面的旧脚本不认这个参数），用 git 直接对齐：
+>
+> ```bash
+> cd ~/dglab-mc && git fetch --depth 1 origin main && git reset --hard FETCH_HEAD && bash install.sh
+> ```
+>
+> 判断更新成功没：启动时只有一句 `=== DG-LAB 中继已启动（端口 9999）===` 就是新版；如果还是 `[relay] listening ...` 加一堆地址，说明跑的还是旧副本。
+
 ## 调参数
 
 全在游戏里那个 **DG-LAB** 面板上，滑条和勾选框直接拖，改完自动存。常用的几个：
