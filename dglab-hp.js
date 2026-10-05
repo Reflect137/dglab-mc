@@ -12,7 +12,7 @@
 'use strict';
 
 var SCRIPT_NAME = 'dglab-hp';
-var SCRIPT_VER = '1.0.0';
+var SCRIPT_VER = '1.1.0';
 var PANEL_TITLE = 'DG-LAB';
 
 /* ---- 1. 运行环境（取不到的模块不会让脚本崩） ---- */
@@ -87,6 +87,60 @@ function chat(msg) {
         }
     } catch (e2) { /* 忽略 */ }
     console.log(m);
+}
+
+/* ========================================================================== *
+ *  错误上报：任何一处出错都直接在游戏里说出来（clientMessage），并在面板上留痕
+ * ========================================================================== */
+
+var ERR_LAST_AT = {};   // 出错位置 -> 上次上报时间（同一处 3 秒内只说一次，防刷屏）
+var ERR_LIST = [];      // 最近 20 条，!dg errors 可以看
+var ERR_COUNT = 0;      // 出错总次数
+
+/** 把异常整理成一条能直接看懂的消息 */
+function errText(where, e, extra) {
+    var msg = (e && e.message) ? e.message : String(e);
+    var stack = '';
+    try {
+        if (e && e.stack) {
+            var lines = String(e.stack).split('\n');
+            stack = lines.slice(0, 3).join(' ← ');
+        }
+    } catch (e2) { /* 拿不到就算了 */ }
+    var out = '❌ ' + where + '：' + msg;
+    if (stack && stack.indexOf(msg) < 0) out += '　' + stack;
+    if (extra) out += '　[' + extra + ']';
+    return '[DG-LAB] ' + out;
+}
+
+/** 统一入口：记下来 + 直接弹给玩家 */
+function reportError(where, e, extra) {
+    var now = 0;
+    try { now = nowMs(); } catch (e2) { now = 0; }
+    ERR_COUNT++;
+    var text = errText(where, e, extra);
+    S.lastError = text;
+    try {
+        ERR_LIST.push(text + '（第 ' + S.tickCount + ' 刻）');
+        if (ERR_LIST.length > 20) ERR_LIST.shift();
+    } catch (e3) { /* 忽略 */ }
+    var last = ERR_LAST_AT[where] || 0;
+    if (now && last && now - last < 3000) return;   // 同一处 3 秒内只报一次
+    ERR_LAST_AT[where] = now;
+    chat(text + '（v' + SCRIPT_VER + '）');
+    try { log('错误上报', where, e); } catch (e4) { /* 忽略 */ }
+}
+
+/** 包一层：出错就上报，不让异常把这一帧弄没 */
+function guard(where, fn) {
+    return function () {
+        try {
+            return fn.apply(null, arguments);
+        } catch (e) {
+            reportError(where, e);
+            return undefined;
+        }
+    };
 }
 
 /* 关键事件提示（走 clientMessage 的本地消息）
@@ -668,7 +722,7 @@ function loadConfig() {
                 }
             }
         } catch (e) {
-            log('读取设置失败', def.key, e);
+            reportError('读取设置（' + def.key + '）', e);
         }
     }
     log('设置已读取', JSON.stringify(CONFIG));
@@ -688,7 +742,7 @@ function saveConfig() {
             else if (def.type === 'float') MOD.sp.putFloat(k, Number(CONFIG[def.key]));
             else MOD.sp.putString(k, String(CONFIG[def.key]));
         } catch (e) {
-            log('保存设置失败', def.key, e);
+            reportError('保存设置（' + def.key + '）', e);
         }
     }
     log('设置已保存');
@@ -863,6 +917,7 @@ var DG = {
             ws = new MOD.socket.WebSocket(url);
         } catch (e) {
             S.lastError = '创建 WebSocket 失败: ' + e;
+            reportError('创建 WebSocket 失败', e, '游戏里可能没有 socket 模块');
             logAlways(S.lastError);
             return false;
         }
@@ -878,26 +933,44 @@ var DG = {
                会把新连接打掉（onClosed 里会清 this.ws），之后所有下发静默失败 */
             ws.setOnOpenListener(function () {
                 if (self.ws !== ws) return;
-                self.state = 'waiting';
-                logAlways('已连接中继', url);
+                try {
+                    self.state = 'waiting';
+                    logAlways('已连接中继', url);
+                } catch (e) {
+                    reportError('WebSocket 连接成功回调', e);
+                }
             });
             ws.setOnTextMessageListener(function (msg) {
                 if (self.ws !== ws) return;
-                self.onText(msg);
+                try {
+                    self.onText(msg);
+                } catch (e) {
+                    reportError('处理中继发来的消息', e, '内容前 60 字：' + String(msg).slice(0, 60));
+                }
+                try {
+                    keepHooked('中继消息');     // 这条回调不受全局事件被替换的影响
+                } catch (e2) { /* 忽略 */ }
             });
             ws.setOnClosedListener(function (code, reason) {
                 if (self.ws !== ws) return;
-                self.onClosed(code, reason);
+                try {
+                    self.onClosed(code, reason);
+                } catch (e) {
+                    reportError('WebSocket 断开回调', e, 'code=' + code);
+                }
             });
             ws.setOnErrorListener(function (err) {
                 if (self.ws !== ws) return;
-                S.lastError = 'WebSocket 错误: ' + err;
-                logAlways(S.lastError);
+                try {
+                    reportError('连不上中继', new Error(String(err)),
+                        '先确认 Termux 里 dglab 还在跑（地址 ' + url + '）');
+                } catch (e) {
+                    /* 忽略 */
+                }
             });
             ws.connect();
         } catch (e) {
-            S.lastError = '连接失败: ' + e;
-            logAlways(S.lastError);
+            reportError('连接中继失败', e, '先确认 Termux 里 dglab 还在跑（地址 ' + url + '）');
             this.state = 'closed';
             return false;
         }
@@ -933,7 +1006,9 @@ var DG = {
             log('>', JSON.stringify(obj).slice(0, 300));
             return true;
         } catch (e) {
-            S.lastError = '发送失败: ' + e;
+            var brief = '';
+            try { brief = JSON.stringify(obj).slice(0, 60); } catch (e2) { brief = '(内容无法序列化)'; }
+            reportError('发送消息给中继失败', e, '内容前 60 字：' + brief);
             logAlways(S.lastError);
             return false;
         }
@@ -1170,6 +1245,20 @@ var DG = {
     },
 
     pump: function (t) {
+        /* 一直连不上就每隔一分钟提醒一次（第一次失败已经报过一次了） */
+        if (this.state !== 'paired') {
+            if (!this.offlineSince) this.offlineSince = t;
+            else if (t - this.offlineSince >= 60000 && t - (this.lastOfflineTip || 0) >= 60000) {
+                this.lastOfflineTip = t;
+                var sec = Math.round((t - this.offlineSince) / 1000);
+                chat('[DG-LAB] 还没连上中继（已 ' + sec + ' 秒）' +
+                    (CONFIG.paused ? '｜当前是暂停状态' : '｜去 Termux 里敲 dglab 启动中继') +
+                    '，连上后会自动继续');
+            }
+        } else if (this.offlineSince) {
+            this.offlineSince = 0;
+            this.lastOfflineTip = 0;
+        }
         if (this.state === 'closed' && this.reconnectAt && t >= this.reconnectAt) {
             if (CONFIG.autoReconnect && !S.paused && CONFIG.enabled) {
                 this.reconnectAt = 0;
@@ -1900,22 +1989,42 @@ function dglabTick() {
     if (dt > 1000) dt = 1000;
     S.tickCount++;
 
-    if (!S.inited) init('onTickEvent');
+    if (!S.inited) {
+        try {
+            init('onTickEvent');
+        } catch (e) {
+            reportError('初始化 init()', e);
+        }
+    }
 
-    DG.pump(t);
+    try {
+        DG.pump(t);
+    } catch (e) {
+        reportError('中继连接管理 DG.pump()', e);
+    }
 
     if (S.tickCount % clamp(CONFIG.pollEveryTicks, 1, 20) === 0 || S.hurtFlag) {
         S.hurtFlag = false;
         try {
             pollVitals(t);
         } catch (e) {
-            S.lastError = '读取血量失败: ' + e;
-            log(S.lastError);
+            reportError('读取血量 / 判定伤害（pollVitals）', e,
+                '第 ' + S.tickCount + ' 刻');
         }
     }
 
-    engineTick(t, dt);
-    tickTip(t);
+    try {
+        engineTick(t, dt);
+    } catch (e) {
+        reportError('强度与波形计算（engineTick）', e);
+    }
+    try {
+        tickTip(t);
+    } catch (e) {
+        reportError('屏幕提示（tickTip）', e);
+    }
+
+    if (S.tickCount % 100 === 0) keepHooked('每刻主循环');
 }
 
 /* 受伤动画（EntityBehavior.HURT_ANIMATION = 2）：只当作“立刻查一次血量”的信号 */
@@ -1981,14 +2090,32 @@ function connectRelay(manual) {
 }
 
 function dglabReady() {
-    if (!S.inited) init('onReadyEvent');
-    else {
-        loadConfig();
-        if ((DG.state === 'idle' || DG.state === 'closed') && CONFIG.autoConnect) connectRelay(false);
+    chat('[DG-LAB] 脚本开始加载 v' + SCRIPT_VER + '…');
+    try {
+        if (!S.inited) init('onReadyEvent');
+        else {
+            loadConfig();
+            if ((DG.state === 'idle' || DG.state === 'closed') && CONFIG.autoConnect) connectRelay(false);
+        }
+    } catch (e) {
+        reportError('进入世界初始化（dglabReady）', e);
     }
     S.lastHp = null;
     S.lastTotal = null;
     logAlways('已进入世界');
+
+    /* 加载结果直接说出来：缺了哪个模块、出错几次，一眼就能看到 */
+    var miss = [];
+    if (!MOD.socket || !MOD.socket.WebSocket) miss.push('socket（连不上中继）');
+    if (!MOD.player) miss.push('player（读不到血量）');
+    if (!MOD.minecraft) miss.push('minecraft（发不了提示）');
+    if (!MOD.ImGui) miss.push('ImGui（画不了面板）');
+    if (!MOD.sp) miss.push('sp（设置无法保存）');
+    keepHooked('进入世界');
+    var line = '[DG-LAB] 已加载 v' + SCRIPT_VER + '，' + SETTING_DEFS.length + ' 项设置';
+    if (miss.length) line += '｜⚠️ 缺少模块：' + miss.join('、');
+    if (ERR_COUNT > 0) line += '｜加载过程中出错 ' + ERR_COUNT + ' 次，输入 !dg errors 查看';
+    chat(line);
 }
 
 function dglabLeave() {
@@ -2116,7 +2243,7 @@ function handleCommand(msg) {
 
     if (cmd === 'help' || cmd === '?') {
         chat('[DG-LAB] 指令: !dg ui | on/off | pause/resume | stop | zero | status | pair | ' +
-            'connect | disconnect | wave <名字> | set <项> <值> | list | save | reset | test [秒]');
+            'connect | disconnect | wave <名字> | set <项> <值> | list | save | reset | test [秒] | errors 看错误');
         chat('[DG-LAB] 例: !dg set 每点伤害加电 2   !dg wave 心跳节奏   !dg test 3');
         return true;
     }
@@ -2201,6 +2328,17 @@ function handleCommand(msg) {
         chat('[DG-LAB] ' + k + ' = ' + CONFIG[k]);
         return true;
     }
+    if (cmd === 'errors' || cmd === 'err') {
+        if (!ERR_COUNT) {
+            chat('[DG-LAB] 目前没有错误记录');
+            return true;
+        }
+        chat('[DG-LAB] 出错 ' + ERR_COUNT + ' 次，最近 ' + Math.min(ERR_LIST.length, 8) + ' 条：');
+        var from = Math.max(0, ERR_LIST.length - 8);
+        for (var ei = from; ei < ERR_LIST.length; ei++) chat('  ' + (ei + 1) + '. ' + ERR_LIST[ei]);
+        return true;
+    }
+
     if (cmd === 'list') {
         var ls = fmtConfigList();
         for (var j = 0; j < ls.length; j++) chat('[DG-LAB] ' + ls[j]);
@@ -2318,7 +2456,7 @@ var UI = {
         try {
             if (MOD.ImGui.Text) MOD.ImGui.Text(String(s));
         } catch (e) {
-            /* 忽略 */
+            reportError('画面板：Text 调用失败', e);
         }
     },
 
@@ -2326,7 +2464,7 @@ var UI = {
         try {
             if (MOD.ImGui.SameLine) MOD.ImGui.SameLine();
         } catch (e) {
-            /* 忽略 */
+            reportError('画面板：SameLine 调用失败', e);
         }
     },
 
@@ -2334,7 +2472,7 @@ var UI = {
         try {
             if (MOD.ImGui.Separator) MOD.ImGui.Separator();
         } catch (e) {
-            /* 忽略 */
+            reportError('画面板：Separator 调用失败', e);
         }
     },
 
@@ -2342,7 +2480,7 @@ var UI = {
         try {
             if (MOD.ImGui.Spacing) MOD.ImGui.Spacing();
         } catch (e) {
-            /* 忽略 */
+            reportError('画面板：Spacing 调用失败', e);
         }
     },
 
@@ -2530,7 +2668,8 @@ function drawPanel() {
             if (CONFIG.panelCompact && UI.button('显示全部设置##btn_expand')) {
                 setSetting('panelCompact', false);   // 紧凑模式下的逃生口
             }
-            if (S.lastError) UI.text('最近错误：' + S.lastError);
+            if (ERR_COUNT > 0) UI.text('错误 ' + ERR_COUNT + ' 次：' + String(S.lastError || '').slice(0, 80));
+            else if (S.lastError) UI.text('最近错误：' + S.lastError);
             UI.separator();
 
             for (var g = 0; g < SETTING_GROUPS.length; g++) {
@@ -2584,10 +2723,10 @@ function drawPanel() {
             if (UI.button('配对信息##btn_pair')) showPairing();
         }
     } catch (e) {
-        log('面板绘制异常', e);
+        reportError('画面板（drawPanel）', e);
     }
 
-    UI.end();
+    try { UI.end(); } catch (e) { /* 面板收尾失败就算了 */ }
     if (avShow && avShow.value === false) setSetting('showPanel', false, true, true);
 }
 
@@ -2619,6 +2758,9 @@ function drawHud() {
 }
 
 function dglabImgui() {
+    try {
+        keepHooked('画面板');
+    } catch (e) { /* 忽略 */ }
     try {
         drawPanel();
     } catch (e) {
@@ -2683,7 +2825,7 @@ var onTickEvent = function () {
     try {
         dglabTick();
     } catch (e) {
-        logAlways('tick 异常: ' + e);
+        reportError('onTickEvent（每刻主循环）', e);
     }
 };
 
@@ -2692,7 +2834,7 @@ var onEntityBehaviorEvent = function (id, behavior, value) {
     try {
         dglabHurt(id, behavior, value);
     } catch (e) {
-        log('受伤事件异常', e);
+        reportError('onEntityBehaviorEvent（受伤事件）', e);
     }
 };
 
@@ -2701,7 +2843,7 @@ var onReadyEvent = function () {
     try {
         dglabReady();
     } catch (e) {
-        logAlways('进入世界初始化异常: ' + e);
+        reportError('onReadyEvent（进入世界初始化）', e);
     }
 };
 
@@ -2710,7 +2852,7 @@ var onLeaveGameEvent = function () {
     try {
         dglabLeave();
     } catch (e) {
-        log('退出世界处理异常', e);
+        reportError('onLeaveGameEvent（退出世界）', e);
     }
 };
 
@@ -2719,7 +2861,7 @@ var onSendChatMessageEvent = function (message) {
     try {
         if (dglabChat(message)) return true;
     } catch (e) {
-        log('指令处理异常', e);
+        reportError('onSendChatMessageEvent（聊天指令）', e);
     }
     return callPrevHandler('onSendChatMessageEvent', arguments) === true;
 };
@@ -2729,7 +2871,7 @@ var onImGuiRenderEvent = function () {
     try {
         dglabImgui();
     } catch (e) {
-        /* 面板永远不能影响游戏 */
+        reportError('onImGuiRenderEvent（画面板）', e);
     }
 };
 
@@ -2759,26 +2901,54 @@ var API = {
     readVitals: readVitals,
 };
 
+/* 只有测试脚手架会用到（游戏里没有 module，这一行什么也不做） */
 try {
     if (typeof module !== 'undefined' && module && module.exports) module.exports = API;
 } catch (e) {
     /* 游戏里没有 module，忽略 */
 }
 
-/* 把事件函数挂到全局（游戏引擎按全局名调用），并把接口暴露成 globalThis.DGLAB_HP，
- * 方便别的脚本用 KXH/包装器方式转发，比如：
- *     KXH("onEntityBehaviorEvent", function (a, b, c) { DGLAB_HP.onEntityBehaviorEvent(a, b, c); });
- */
+/* 把事件函数挂到全局（游戏引擎按全局名调用）。
+ * 已经存在的同名函数在文件开头被抓进 PREV_HANDLERS，两边都会被调到。 */
+var OUR_HANDLERS = {
+    onTickEvent: onTickEvent,
+    onEntityBehaviorEvent: onEntityBehaviorEvent,
+    onReadyEvent: onReadyEvent,
+    onLeaveGameEvent: onLeaveGameEvent,
+    onSendChatMessageEvent: onSendChatMessageEvent,
+    onImGuiRenderEvent: onImGuiRenderEvent
+};
+
 try {
     var GLOBAL = (typeof globalThis !== 'undefined') ? globalThis : this;
-    GLOBAL.onTickEvent = onTickEvent;
-    GLOBAL.onEntityBehaviorEvent = onEntityBehaviorEvent;
-    GLOBAL.onReadyEvent = onReadyEvent;
-    GLOBAL.onLeaveGameEvent = onLeaveGameEvent;
-    GLOBAL.onSendChatMessageEvent = onSendChatMessageEvent;
-    GLOBAL.onImGuiRenderEvent = onImGuiRenderEvent;
-    GLOBAL.DGLAB_HP = API;
-    GLOBAL.DGLAB_HP.config = API.CONFIG;
+    for (var hookName in OUR_HANDLERS) {
+        if (OUR_HANDLERS.hasOwnProperty(hookName)) GLOBAL[hookName] = OUR_HANDLERS[hookName];
+    }
 } catch (e) {
     logAlways('挂载全局事件失败: ' + e);
+}
+
+/* 有些加载器 / 别的脚本会在本脚本之后把全局事件函数整个换掉，那样本脚本就再也不跑了
+ *（表现就是「加载完什么都没发生」）。这里定期检查：被换掉就抢回来，
+ *  同时把对方的实现接进调用链，两边的代码都还能跑到。 */
+function keepHooked(where) {
+    var G = (typeof globalThis !== 'undefined') ? globalThis : null;
+    if (!G) return;
+    for (var name in OUR_HANDLERS) {
+        if (!OUR_HANDLERS.hasOwnProperty(name)) continue;
+        if (G[name] === OUR_HANDLERS[name]) continue;
+        var other = G[name];
+        if (typeof other === 'function' && PREV_HANDLERS[name] !== other) {
+            PREV_HANDLERS[name] = other;      // 对方的实现保留在调用链里
+            reportError('事件函数被别的脚本替换（已抢回）', new Error(name + ' 被换成了别的函数'),
+                where + '｜已把对方的实现接进调用链');
+        } else {
+            reportError('事件函数被顶掉（已抢回）', new Error(name + ' 不是本脚本的函数'), where);
+        }
+        try {
+            G[name] = OUR_HANDLERS[name];
+        } catch (e2) {
+            reportError('抢回事件函数失败（' + name + '）', e2);
+        }
+    }
 }
