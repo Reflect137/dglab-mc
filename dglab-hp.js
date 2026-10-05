@@ -449,7 +449,7 @@ var DEFAULT_CONFIG = {
 
     /* 回血 / 自然回落 */
     healReduces: true,
-    healMode: 'full',
+    healMode: 'ratio',              // 默认按回血比例减
     healFactor: 2,
     hurtFloorEnergy: 0,
     healPulse: false,
@@ -719,6 +719,7 @@ function loadConfig() {
         }
     }
     fixPanelSetting();
+    fixHealModeSetting();
     fixTipSetting();
     fixDecaySetting();
     log('设置已读取', JSON.stringify(CONFIG));
@@ -743,6 +744,26 @@ function fixPanelSetting() {
         }
         MOD.sp.putBoolean(key, true);
     } catch (e2) { /* 存档读不了就算了 */ }
+}
+
+/* 一次性：「回血怎么减」以前默认是"回满血才清"，现在默认按回血比例减 */
+function fixHealModeSetting() {
+    if (!spAvailable()) return;
+    var key = SP_PREFIX + 'healFix1';
+    var saved = false;
+    try { saved = MOD.sp.contains(SP_PREFIX + 'healMode'); } catch (e0) { saved = false; }
+    if (!saved) return;
+    var done = false;
+    try { done = MOD.sp.getBoolean(key); } catch (e) { done = false; }
+    if (done) return;
+    try {
+        if (CONFIG.healMode === 'full') {
+            CONFIG.healMode = DEFAULT_CONFIG.healMode;
+            try { MOD.sp.putString(SP_PREFIX + 'healMode', CONFIG.healMode); } catch (e2) { /* 忽略 */ }
+            chat('[DG-LAB] 「回血怎么减」已按新默认改成"按回血比例减"（想回满血才清就在面板里改回去）');
+        }
+        MOD.sp.putBoolean(key, true);
+    } catch (e3) { /* 忽略 */ }
 }
 
 /* 一次性：屏幕提示电量以前默认是开的，存档里存着 true，现在默认关掉 */
@@ -854,6 +875,9 @@ var S = {
     deviceZeroSince: 0,   // 设备回报强度一直是 0 的起始时间
     deviceZeroHinted: false,
     creativeSince: 0,     // 连续处于创造/旁观的起始时间
+    leavingWorld: false,  // 正在退出世界（别把实体消失误判成死亡）
+    noPlayerSince: 0,     // 连续读不到玩家的起始时间
+    hpReadAt: 0,          // 最近一次读到血量的时间
     unloaded: false,      // 已一键退出（所有回调空转）
     quitArmed: false,     // 面板上"退出"按钮已点过一次
     offlineStop: false,   // 连不上太久，已自动停止输出
@@ -2120,14 +2144,27 @@ function pollVitals(t) {
     var p = resolvePlayer();
     if (!p) {
         if (S.lastHp !== null) {
-            /* 退出世界 / 换维度：清状态，避免误判伤害 */
             S.lastHp = null;
             S.lastTotal = null;
             S.player = null;
             S.playerUid = '';
         }
+        /* 玩家实体消失：死亡界面会把实体移除，这时要按死亡处理（以前直接清状态，
+         * 结果"死亡拉满"永远不生效）。但要排除几种"不是死亡"的情况：
+         *   1) 只是 API 卡一下 / 世界还没就绪  -> 要求连续 1 秒读不到
+         *   2) 压根不在世界里（主菜单、加载中）  -> 要求最近 5 秒内读到过血量
+         *   3) 正在退出世界                    -> dglabLeave 会置 leavingWorld */
+        if (!S.noPlayerSince) S.noPlayerSince = t;
+        if (!S.leavingWorld && !S.deathHandled && CONFIG.enabled && !S.paused &&
+            CONFIG.deathMode !== 'none' && S.hpReadAt > 0 && t - S.hpReadAt <= 5000 &&
+            t - S.noPlayerSince >= 1000) {
+            log('玩家实体消失 ' + Math.round((t - S.noPlayerSince) / 1000) + ' 秒，按死亡处理');
+            applyDeath(t);
+        }
         return;
     }
+    S.leavingWorld = false;
+    S.noPlayerSince = 0;
     S.player = p;
 
     var uid = '';
@@ -2146,6 +2183,7 @@ function pollVitals(t) {
     var v = readVitals(p);
     if (!v) return;
     S.lastMaxHp = v.maxHp;
+    S.hpReadAt = t;                 // 最近一次真正读到血量的时间
 
     if (CONFIG.ignoreCreative && isIgnoredGameType(p)) {
         S.lastHp = v.hp;
@@ -2237,21 +2275,30 @@ function pollVitals(t) {
             }
         }
     } else if (!S.deathHandled) {
-        S.deathHandled = true;
-        if (CONFIG.deathMode === 'max') {
-            S.energy = energyCapValue();
-            S.lastDamageAt = t;
-            S.strength = strengthTarget();
-            if (CONFIG.burstEnabled && CONFIG.deathBurstSec > 0) {
-                extendCharge(t, CONFIG.deathBurstSec);
-                S.nextPulseAt = 0;
-            }
-            if (CONFIG.deathInstant) applyStrengthNow(t);
-            noticeRoutine('死亡：电量拉满 ' + round1(S.energy) + '，强度 ' + Math.round(S.strength));
-        } else if (CONFIG.deathMode === 'zero') {
-            resetOutput('死亡');
-            noticeRoutine('死亡：已归零');
+        applyDeath(t);
+    }
+}
+
+/* 死亡处理：按「死亡处理」设置拉满/归零/不动。
+ * 血量读到 0，或者玩家实体直接消失（死亡界面里实体会被移除）都走这里。 */
+function applyDeath(t) {
+    if (S.deathHandled) return;
+    S.deathHandled = true;
+    S.decayUntil = 0;
+    S.decayFrom = 0;
+    if (CONFIG.deathMode === 'max') {
+        S.energy = energyCapValue();
+        S.lastDamageAt = t;
+        S.strength = strengthTarget();
+        if (CONFIG.burstEnabled && CONFIG.deathBurstSec > 0) {
+            extendCharge(t, CONFIG.deathBurstSec);
+            S.nextPulseAt = 0;
         }
+        if (CONFIG.deathInstant) applyStrengthNow(t);
+        noticeRoutine('死亡：电量拉满 ' + round1(S.energy) + '，强度 ' + Math.round(S.strength));
+    } else if (CONFIG.deathMode === 'zero') {
+        resetOutput('死亡');
+        noticeRoutine('死亡：已归零');
     }
 }
 
@@ -2366,6 +2413,9 @@ function connectRelay(manual) {
 }
 
 function dglabReady() {
+    S.leavingWorld = false;      // 又进世界了
+    S.noPlayerSince = 0;
+    S.hpReadAt = 0;
     flushSave();                 /* 上一局改的设置先落盘，再读回来 */
     try {
         if (!S.inited) init('onReadyEvent');
@@ -2404,6 +2454,8 @@ function dglabReady() {
 }
 
 function dglabLeave() {
+    S.leavingWorld = true;
+    S.deathHandled = false;      // 退出世界不算死亡
     resetOutput('退出世界');
     try {
         DG.close(false);
@@ -2501,6 +2553,9 @@ function setSetting(key, raw, save, quiet) {
     if (key === 'waveform' || key === 'bWaveform' || key === 'waveSpeed' || key === 'bWaveShiftFrames' ||
         key === 'pulseLeadMs') {
         S.nextPulseAt = 0;
+    }
+    if (key === 'healMode') {
+        try { if (spAvailable()) MOD.sp.putBoolean(SP_PREFIX + 'healFix1', true); } catch (e) { /* 忽略 */ }
     }
     if (key === 'tipEnabled') {
         try { if (spAvailable()) MOD.sp.putBoolean(SP_PREFIX + 'tipFix1', true); } catch (e) { /* 忽略 */ }
