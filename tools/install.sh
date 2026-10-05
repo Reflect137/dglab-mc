@@ -3,12 +3,12 @@
 #  DG-LAB × 我的世界 · 安装脚本
 #
 #  用法：
-#      bash install.sh                装好，然后敲 dglab 启动（默认）
-#      bash install.sh --run          装完立刻启动
-#      bash install.sh --check        只检查环境，不装不改
-#      bash install.sh --update       更新到最新版（在仓库目录里也能用）
-#      bash install.sh --port 8888    配合 --run 指定端口（默认 9999）
-#      bash install.sh --host 0.0.0.0 允许别的设备连（默认只绑本机 127.0.0.1）
+#      bash tools/install.sh                装好，然后敲 dglab 启动（默认）
+#      bash tools/install.sh --run          装完立刻启动
+#      bash tools/install.sh --check        只检查环境，不装不改
+#      bash tools/install.sh --update       更新到最新版（在仓库目录里也能用）
+#      bash tools/install.sh --port 8888    配合 --run 指定端口（默认 9999）
+#      bash tools/install.sh --host 0.0.0.0 允许别的设备连（默认只绑本机 127.0.0.1）
 #
 #  支持：Termux（安卓手机）、Debian/Ubuntu、其它带 pkg/apt/apk 的 Linux
 # ============================================================================
@@ -74,13 +74,13 @@ usage() {
     cat <<'USAGE'
 DG-LAB × 我的世界 · 安装脚本
 
-  bash install.sh                装好，然后敲 dglab 启动（默认）
-  bash install.sh --run          装完立刻启动
-  bash install.sh --check        只检查环境，不装不改
-  bash install.sh --update       更新到最新版
-  bash install.sh --port 8888    配合 --run 指定端口（默认 9999）
-  bash install.sh --host 0.0.0.0 允许别的设备连（默认只绑本机）
-  bash install.sh -h             显示这段帮助
+  bash tools/install.sh                装好，然后敲 dglab 启动（默认）
+  bash tools/install.sh --run          装完立刻启动
+  bash tools/install.sh --check        只检查环境，不装不改
+  bash tools/install.sh --update       更新到最新版
+  bash tools/install.sh --port 8888    配合 --run 指定端口（默认 9999）
+  bash tools/install.sh --host 0.0.0.0 允许别的设备连（默认只绑本机）
+  bash tools/install.sh -h             显示这段帮助
 
 环境变量：DGLAB_DIR 安装目录（默认 ~/dglab-mc）、DGLAB_REPO 仓库地址
 USAGE
@@ -137,9 +137,13 @@ fi
 # 是不是在项目目录里直接跑的
 SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo '')"
 IN_REPO=0
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/dglab-hp.js" ] && [ -d "$SCRIPT_DIR/tools" ]; then
-    IN_REPO=1
-    DIR="$SCRIPT_DIR"
+if [ -n "$SCRIPT_DIR" ]; then
+    # install.sh 放在 tools/ 里，项目根是它的上一级（也兼容直接放在根目录的旧版）
+    if [ -f "$SCRIPT_DIR/dglab-hp.js" ] && [ -d "$SCRIPT_DIR/tools" ]; then
+        IN_REPO=1; DIR="$SCRIPT_DIR"
+    elif [ -f "$SCRIPT_DIR/../dglab-hp.js" ] && [ -d "$SCRIPT_DIR/../tools" ]; then
+        IN_REPO=1; DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+    fi
 fi
 
 say ""
@@ -172,7 +176,7 @@ if [ "$DO_CHECK" = "1" ]; then
     fi
     [ -w "$BIN_DIR" ] && ok "可写目录：$BIN_DIR（能装 dglab 命令）" || warn "$BIN_DIR 不可写"
     say ""
-    say "检查完毕。直接运行 bash install.sh 即可安装。"
+    say "检查完毕。直接运行 bash tools/install.sh 即可安装。"
     exit 0
 fi
 
@@ -215,7 +219,7 @@ if [ "$IN_REPO" = "1" ]; then
     if [ "$DO_UPDATE" = "1" ]; then
         update_repo "$DIR"
     else
-        say "  想检查有没有新版：bash install.sh --update"
+        say "  想检查有没有新版：bash tools/install.sh --update"
     fi
 elif [ -d "$DIR/.git" ]; then
     if have git; then
@@ -228,14 +232,14 @@ elif [ -d "$DIR/.git" ]; then
         warn "已有仓库但没有 git，跳过更新：$DIR"
     fi
 else
-    have git || die "需要 git 才能下载，请先 pkg install -y git；也可以手动下载 ZIP 解压后，在该目录里运行 bash install.sh"
+    have git || die "需要 git 才能下载，请先 pkg install -y git；也可以手动下载 ZIP 解压后，在该目录里运行 bash tools/install.sh"
     if [ -d "$DIR" ] && [ -n "$(ls -A "$DIR" 2>/dev/null)" ]; then
         die "$DIR 已存在，而且不是本项目的 git 仓库。先把它改名或清空再装，例如：mv \"$DIR\" \"$DIR.old\""
     fi
     say "  从 $REPO 克隆到 $DIR …"
     if ! clone_err="$(git clone --depth 1 "$REPO" "$DIR" 2>&1)"; then
         say "$clone_err" >&2
-        die "克隆失败。检查网络；或者手动下载 ZIP 解压后在该目录里运行 bash install.sh"
+        die "克隆失败。检查网络；或者手动下载 ZIP 解压后在该目录里运行 bash tools/install.sh"
     fi
     ok "已下载到 $DIR"
 fi
@@ -255,7 +259,7 @@ elif cat > "$WRAPPER" <<EOF
 DIR="$DIR"
 if [ ! -f "\$DIR/tools/dglab-relay.js" ]; then
     echo "找不到 \$DIR/tools/dglab-relay.js（项目被移动或删除了？）" >&2
-    echo "重新跑一次安装脚本即可修复：bash \$DIR/install.sh" >&2
+    echo "重新跑一次安装脚本即可修复：bash \$DIR/tools/install.sh" >&2
     exit 1
 fi
 command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock
@@ -291,8 +295,8 @@ say ""
 say "  游戏脚本这样拿（存到 /sdcard/Download/）："
 say "    bash $DIR/tools/get-game-script.sh"
 say ""
-say "  其它：换端口 dglab --port 8888 ｜ 检查环境 bash install.sh --check"
-say "        更新版本 bash install.sh --update（在 $DIR 里跑）"
+say "  其它：换端口 dglab --port 8888 ｜ 检查环境 bash tools/install.sh --check"
+say "        更新版本 bash tools/install.sh --update（在 $DIR 里跑）"
 say ""
 
 if [ "$DO_RUN" = "0" ]; then

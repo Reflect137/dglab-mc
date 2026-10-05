@@ -9,7 +9,7 @@
 打开 Termux，粘这一行：
 
 ```bash
-pkg update -y && pkg install -y git nodejs && (git -C ~/dglab-mc pull --ff-only 2>/dev/null || git clone --depth 1 https://github.com/Reflect137/dglab-mc ~/dglab-mc) && bash ~/dglab-mc/install.sh
+pkg update -y && pkg install -y git nodejs && (git -C ~/dglab-mc pull --ff-only 2>/dev/null || git clone --depth 1 https://github.com/Reflect137/dglab-mc ~/dglab-mc) && bash ~/dglab-mc/tools/install.sh
 ```
 
 装完敲 `dglab` 启动中继。
@@ -37,7 +37,7 @@ bash ~/dglab-mc/tools/get-game-script.sh
 把「装」那一行**再粘一次**就是更新，或者用这条短的：
 
 ```bash
-bash ~/dglab-mc/install.sh --update
+bash ~/dglab-mc/tools/install.sh --update
 ```
 
 它会直接告诉你结果，不用自己比对：
