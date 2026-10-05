@@ -439,7 +439,7 @@ var DEFAULT_CONFIG = {
     startDelaySec: 0,
     stopBelowHp: 0,
     respawnGraceSec: 0,
-    respawnDecaySec: 3,               // 复活后几秒内回落到 0（0 = 立刻清零）
+    respawnDecaySec: 3,               // 满血（含复活）后几秒内回落到 0（0 = 立刻清零）
     instantFall: true,
     maxRisePerSecond: 20,
     maxFallPerSecond: 30,
@@ -554,7 +554,7 @@ var SETTING_DEFS = [
     { key: 'startDelaySec', cn: '受伤后延迟加电', group: '加电曲线', type: 'float', min: 0, max: 5, step: 0.5 },
     { key: 'stopBelowHp', cn: '低于血量就停', group: '加电曲线', type: 'float', min: 0, max: 20, step: 0.5 },
     { key: 'respawnGraceSec', cn: '复活保护时间', group: '加电曲线', type: 'float', min: 0, max: 30, step: 1 },
-    { key: 'respawnDecaySec', cn: '复活后回落秒数', group: '死亡', type: 'float', min: 0, max: 60, step: 1, core: true },
+    { key: 'respawnDecaySec', cn: '满血回落秒数', group: '死亡', type: 'float', min: 0, max: 60, step: 1, core: true },
     { key: 'instantFall', cn: '回血瞬间回落', group: '加电曲线', type: 'bool' },
     { key: 'maxRisePerSecond', cn: '每秒最大涨幅', group: '加电曲线', type: 'float', min: 0.5, max: 200, step: 0.5 },
     { key: 'maxFallPerSecond', cn: '每秒最大回落', group: '加电曲线', type: 'float', min: 0.5, max: 200, step: 0.5 },
@@ -748,6 +748,9 @@ function fixPanelSetting() {
 function fixDecaySetting() {
     if (!spAvailable()) return;
     var key = SP_PREFIX + 'decayFix1';
+    var saved = false;
+    try { saved = MOD.sp.contains(SP_PREFIX + 'respawnDecaySec'); } catch (e0) { saved = false; }
+    if (!saved) return;          // 存档里还没存过这个设置，没什么可修，也别打标记
     var done = false;
     try { done = MOD.sp.getBoolean(key); } catch (e) { done = false; }
     if (done) return;
@@ -755,7 +758,7 @@ function fixDecaySetting() {
         if (MOD.sp.contains(SP_PREFIX + 'respawnDecaySec') && CONFIG.respawnDecaySec === 0) {
             CONFIG.respawnDecaySec = DEFAULT_CONFIG.respawnDecaySec;
             try { MOD.sp.putFloat(SP_PREFIX + 'respawnDecaySec', CONFIG.respawnDecaySec); } catch (e2) { /* 忽略 */ }
-            chat('[DG-LAB] 「复活后回落秒数」之前是 0（旧默认值），已改成 ' +
+            chat('[DG-LAB] 「满血回落秒数」之前是 0（旧默认值），已改成 ' +
                 round1(CONFIG.respawnDecaySec) + ' 秒；想立刻清零就把它调回 0');
         }
         MOD.sp.putBoolean(key, true);
@@ -1684,7 +1687,7 @@ function onDamage(dmg, t) {
 }
 
 /* 只有回血才减电量：默认「回满血才清」，没回满就一直电 */
-function onHeal(amount, t, respawnish) {
+function onHeal(amount, t, energyBefore) {
     if (!CONFIG.healReduces) return;
     if (!CONFIG.enabled || S.paused) return;
     S.stats.heals++;
@@ -1695,9 +1698,23 @@ function onHeal(amount, t, respawnish) {
     var floor = Math.min(CONFIG.hurtFloorEnergy, energyCapValue());
 
     if (CONFIG.healMode === 'full') {
-        if (full && (S.decayUntil > t || (respawnish && CONFIG.respawnDecaySec > 0))) {
-            /* 复活这一下也是「回满血」，但要让回落曲线接管，不能瞬间清电 */
-            log('复活/回落中，回满血不清电');
+        if (full && S.decayUntil > t) {
+            log('回落中，回满血不清电');
+        } else if (full && CONFIG.respawnDecaySec > 0) {
+            /* 满血（复活也是满血）：电量用这几秒滑到 0，而不是一下清零 */
+            var from = Math.max(S.energy, Number(energyBefore) || 0);
+            if (from > 0.01) {
+                S.energy = from;
+                S.decayFrom = from;
+                S.decayStart = t;
+                S.decayUntil = t + Math.round(CONFIG.respawnDecaySec * 1000);
+                S.decayWhy = '满血';
+                noticeRoutine('回满血：电量将在 ' + round1(CONFIG.respawnDecaySec) + ' 秒内回落到 0');
+                log('满血回落开始', round1(from), '→ 0，用时', CONFIG.respawnDecaySec, '秒');
+            } else {
+                S.energy = 0;
+                if (CONFIG.instantFall) applyStrengthNow(t);
+            }
         } else if (full) {
             var hadEnergy = S.energy > 0;
             S.energy = 0;
@@ -2041,10 +2058,7 @@ function pollVitals(t) {
     var dmg = S.lastTotal - v.total;
     var heal = v.total - S.lastTotal;
 
-    /* 这一帧是不是"复活/大恢复"：回满血会立刻清电，得让位给"慢慢回落"。
-     * 除了死亡标记，血量一次涨回 40% 以上也算（有的环境死亡和复活在同一帧，看不到血量=0）*/
-    var hpJump = (v.maxHp > 0 && (v.hp - S.lastHp) >= v.maxHp * 0.4);
-    var respawnish = hpJump || S.deathHandled;
+    /* 回血前先把电量记一份：回满血清电时要交给回落曲线，得知道清掉的是多少 */
     var energyBefore = S.energy;
 
     /* 先更新血量再派发事件：onHeal 要按回血后的血量判断是否回满 */
@@ -2057,28 +2071,28 @@ function pollVitals(t) {
         if (dmg >= CONFIG.minDamage) onDamage(dmg, t);
         else S.skip.min++;                  // 伤害小于「最小伤害」，按设置忽略
     } else if (heal > 0.01) {
-        onHeal(heal, t, respawnish);
+        onHeal(heal, t, energyBefore);
     }
 
     /* 死亡处理：默认把电量直接拉满 */
     if (v.hp > 0.01) {
-        if (S.deathHandled || hpJump) {
-            var wasDead = S.deathHandled;
+        if (S.deathHandled) {
             S.deathHandled = false;
-            if (wasDead && CONFIG.respawnGraceSec > 0) {
+            if (CONFIG.respawnGraceSec > 0) {
                 S.respawnGraceUntil = t + Math.round(CONFIG.respawnGraceSec * 1000);
                 log('复活保护 ' + CONFIG.respawnGraceSec + ' 秒');
             }
-            /* 复活后电量从复活前的值慢慢降到 0（回满血刚清掉的那份也要找回来） */
-            if (CONFIG.respawnDecaySec > 0) {
-                var from = Math.max(S.energy, energyBefore);
-                if (from > 0.01) {
-                    S.energy = from;
-                    S.decayFrom = from;
+            /* 复活后电量从复活前的值慢慢降到 0（若满血那一步已经起过回落，就别重来） */
+            if (CONFIG.respawnDecaySec > 0 && S.decayUntil <= t) {
+                var back = Math.max(S.energy, energyBefore);
+                if (back > 0.01) {
+                    S.energy = back;
+                    S.decayFrom = back;
                     S.decayStart = t;
                     S.decayUntil = t + Math.round(CONFIG.respawnDecaySec * 1000);
+                    S.decayWhy = '复活';
                     noticeRoutine('复活：电量将在 ' + round1(CONFIG.respawnDecaySec) + ' 秒内回落到 0');
-                    log('复活回落开始', round1(from), '→ 0，用时', CONFIG.respawnDecaySec, '秒');
+                    log('复活回落开始', round1(back), '→ 0，用时', CONFIG.respawnDecaySec, '秒');
                 }
             }
         }
@@ -2493,10 +2507,17 @@ function handleCommand(msg) {
             ' 血量' + (S.lastHp === null ? '-' : round1(S.lastHp) + '/' + round1(S.lastMaxHp)) +
             ' 总开关' + (CONFIG.enabled ? '开' : '关') + (S.paused ? '(暂停)' : '') +
             (S.offlineStop ? '(连不上已自动停)' : ''));
+        var g = MOD.ImGui || {};
+        var has = [];
+        for (var wi = 0; wi < ['Button', 'Checkbox', 'SliderInt', 'SliderFloat', 'Combo', 'InputText', 'Text', 'SameLine', 'Separator', 'Spacing'].length; wi++) {
+            var wn = ['Button', 'Checkbox', 'SliderInt', 'SliderFloat', 'Combo', 'InputText', 'Text', 'SameLine', 'Separator', 'Spacing'][wi];
+            has.push(wn + (typeof g[wn] === 'function' ? '✓' : '✗'));
+        }
+        chat('  控件 ' + has.join(' ') + '｜用了 整数=' + (UI.sig.sliderInt || '无') + ' 小数=' + (UI.sig.sliderFloat || '无'));
         chat('  忽略的加电 伤害太小' + S.skip.min + ' ｜ 归零静默' + S.skip.zeroHold +
             ' ｜ 复活保护' + S.skip.grace + ' ｜ 低于停止线' + S.skip.lowHp + ' ｜ 暂停关闭' + S.skip.paused);
         var decayLeft = S.decayUntil > nowMs() ? round1((S.decayUntil - nowMs()) / 1000) + ' 秒' : '无';
-        chat('  复活回落 设定' + round1(CONFIG.respawnDecaySec) + ' 秒 ｜ 当前' + decayLeft +
+        chat('  满血回落 设定' + round1(CONFIG.respawnDecaySec) + ' 秒 ｜ 当前' + decayLeft +
             ' ｜ 最小伤害' + CONFIG.minDamage + ' ｜ 归零静默' + CONFIG.manualZeroHoldMs + 'ms' +
             ' ｜ 延迟加电' + CONFIG.startDelaySec + 's ｜ 停手线' + CONFIG.stopBelowHp);
         if (ERR_LIST.length) chat('  最后错误 ' + ERR_LIST[ERR_LIST.length - 1]);
@@ -2693,26 +2714,31 @@ var UI = {
         return null;
     },
 
+    /* 画一根滑条。整数优先 SliderInt，引擎没有就退回 SliderFloat（读回来再取整）。
+     * 返回值：true/false = 画出来了（true 表示这一帧被拖动了）；null = 这个引擎画不了滑条 */
     slider: function (isInt, label, av, min, max) {
         var g = MOD.ImGui;
-        var f = isInt ? g.SliderInt : g.SliderFloat;
-        if (!f || !av) return null;
-        var fmt = isInt ? '%d' : '%.1f';
-        var variants = [
-            function () { return f(label, av, min, max); },
-            function () { return f(label, av, min, max, fmt); },
-            function () { return f(label, av, min, max, fmt, 0); },
-        ];
-        var cacheKey = isInt ? 'sliderInt' : 'sliderFloat';
-        var start = this.sig[cacheKey] || 0;
-        for (var i = 0; i < variants.length; i++) {
-            var idx = (start + i) % variants.length;
+        if (!av) return null;
+        var tries = [];
+        if (isInt && g.SliderInt) {
+            tries.push(['i0', g.SliderInt, label, av, min, max]);
+            tries.push(['i1', g.SliderInt, label, av, min, max, '%d']);
+        }
+        if (g.SliderFloat) {
+            tries.push(['f0', g.SliderFloat, label, av, min, max]);
+            tries.push(['f1', g.SliderFloat, label, av, min, max, isInt ? '%.0f' : '%.1f']);
+            tries.push(['f2', g.SliderFloat, label, av, min, max, isInt ? '%.0f' : '%.1f', 1]);
+        }
+        if (!isInt && g.SliderInt) tries.push(['i0', g.SliderInt, label, av, min, max]);
+        for (var i = 0; i < tries.length; i++) {
+            var key = tries[i][0], fn = tries[i][1];
             try {
-                var r = variants[idx]();
-                this.sig[cacheKey] = idx;
+                var r = fn(tries[i][2], tries[i][3], tries[i][4], tries[i][5], tries[i][6], tries[i][7]);
+                this.sig[isInt ? 'sliderInt' : 'sliderFloat'] = key;
+                if (isInt && av.value !== undefined) av.value = Math.round(Number(av.value) || 0);
                 return !!r;
             } catch (e) {
-                /* 换下一个签名 */
+                /* 这个签名不行，试下一个 */
             }
         }
         return null;
@@ -2755,29 +2781,69 @@ function drawBool(def) {
     if (av.value !== before) setSetting(def.key, av.value, true, true);
 }
 
+/* 一行一个数字设置：文字 + [−][+] 按钮（按钮最通用的，滑条拖不准就用它点） */
 function drawNumber(def) {
-    var av = getAV(def.key);
-    if (!av) return;
-    syncAV(def.key);
-    var before = av.value;
     var isInt = def.type === 'int';
     var min = def.min === undefined ? 0 : def.min;
     var max = def.max === undefined ? 100 : def.max;
-    var r = UI.slider(isInt, def.cn + '##' + def.key, av, min, max);
-    if (r === null) {
-        UI.text(def.cn + '：' + CONFIG[def.key]);
-        return;
+    var step = def.step === undefined ? (isInt ? 1 : 0.5) : def.step;
+    var big = (max - min) > 200 ? step * 10 : step;      // 大范围给个粗调档
+    var v = Number(CONFIG[def.key]) || 0;
+
+    var av = getAV(def.key);
+    if (av) syncAV(def.key);                     // 必须在画滑条"之前"对齐，画完再对齐会把拖动抹掉
+    var r = av ? UI.slider(isInt, def.cn + '##' + def.key, av, min, max) : null;
+    if (av && r !== null) {
+        if (av.value !== v) nudgeSetting(def.key, av.value, min, max, isInt);
+        return;                                  // 滑条画出来了，这就是主控件
     }
-    if (av.value !== before) setSetting(def.key, av.value, true, true);
+
+    /* 引擎连滑条都画不出来（很少见）：退化成文字 + 加减按钮，至少还能调 */
+    UI.text(def.cn + '：' + fmtNum(v));
+    UI.sameLine();
+    if (UI.button('−##m_' + def.key)) nudgeSetting(def.key, v - step, min, max, isInt);
+    UI.sameLine();
+    if (UI.button('+##p_' + def.key)) nudgeSetting(def.key, v + step, min, max, isInt);
+    if (big !== step) {
+        UI.sameLine();
+        if (UI.button('−−##mm_' + def.key)) nudgeSetting(def.key, v - big, min, max, isInt);
+        UI.sameLine();
+        if (UI.button('++##pp_' + def.key)) nudgeSetting(def.key, v + big, min, max, isInt);
+    }
+}
+
+function fmtNum(v) {
+    var n = Number(v) || 0;
+    return (Math.round(n * 100) / 100) + '';
+}
+
+/* 按钮调值：按档位走，别让浮点误差堆起来 */
+function nudgeSetting(key, want, min, max, isInt) {
+    var v = clamp(Number(want) || 0, min, max);
+    if (isInt) v = Math.round(v);
+    else v = Math.round(v * 1000) / 1000;
+    var cur = Number(CONFIG[key]) || 0;
+    if (v === cur) return;
+    setSetting(key, v, true, true);
 }
 
 function drawEnum(def) {
     var av = getAV(def.key);
-    if (!av) return;
-    var idx = 0;
-    for (var i = 0; i < def.values.length; i++) {
-        if (def.values[i] === CONFIG[def.key]) idx = i;
+    var curIdx = 0;
+    for (var ci = 0; ci < def.values.length; ci++) {
+        if (def.values[ci] === CONFIG[def.key]) curIdx = ci;
     }
+    /* 左右按钮：不依赖 Combo，任何引擎都能调 */
+    var last = def.values.length - 1;
+    UI.text(def.cn);
+    UI.sameLine();
+    if (UI.button('◀##el_' + def.key)) setSetting(def.key, def.values[(curIdx + last) % def.values.length], true, true);
+    UI.sameLine();
+    if (UI.button('▶##er_' + def.key)) setSetting(def.key, def.values[(curIdx + 1) % def.values.length], true, true);
+    UI.sameLine();
+    UI.text('= ' + (def.labels && def.labels[curIdx] !== undefined ? def.labels[curIdx] : CONFIG[def.key]));
+    if (!av) return;
+    var idx = curIdx;
     if (av.value !== idx) av.value = idx;
     var before = av.value;
     var items = (def.labels && def.labels.length === def.values.length) ? def.labels : def.values;
@@ -2853,6 +2919,12 @@ function drawPanel() {
                     (S.waveSwitchAt > t ? '　' + round1((S.waveSwitchAt - t) / 1000) + ' 秒后换' : ''));
             }
             if (S.pairingUrl) UI.text('设备连接地址：' + S.pairingUrl);
+            if (CONFIG.panelCompact) {
+                var coreN = 0;
+                for (var ci2 = 0; ci2 < SETTING_DEFS.length; ci2++) if (SETTING_DEFS[ci2].core) coreN++;
+                UI.text('现在只显示常用 ' + coreN + ' 项，还有 ' + (SETTING_DEFS.length - coreN) +
+                    ' 项没显示（每项都能用 − + 按钮调）');
+            }
             if (CONFIG.panelCompact && UI.button('显示全部设置##btn_expand')) {
                 setSetting('panelCompact', false);   // 紧凑模式下的逃生口
             }
