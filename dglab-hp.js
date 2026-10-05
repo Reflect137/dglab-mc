@@ -136,6 +136,12 @@ function guard(where, fn) {
 }
 
 /* 提示消息：force=true 时忽略最小间隔（配对、归零这种一次性消息用） */
+/* 常规提示：掉血、清电、死亡、复活回落这些，默认不出声（面板「聊天栏提示」可以打开） */
+function noticeRoutine(msg) {
+    if (!CONFIG.chatNotice) return;
+    notice(msg);
+}
+
 function notice(msg, force) {
     if (!CONFIG.clientNotify) return;
     var gap = Number(CONFIG.notifyMinIntervalMs) || 0;
@@ -417,6 +423,8 @@ var DEFAULT_CONFIG = {
     controllerId: 'mc-coyote',
     autoConnect: true,
     autoReconnect: true,
+    reconnectSec: 2,                  // 断线后多久重连
+    heartbeatSec: 30,                 // 心跳间隔（保持连接不被中继当僵尸）
     offlineStopSec: 60,               // 连不上这么多秒就自动停（0 = 一直重试，不停）
     channel: 'A',
 
@@ -426,6 +434,7 @@ var DEFAULT_CONFIG = {
     bWaveform: '',
     zeroBothChannels: true,
     keepInSync: false,
+    keepInSyncMs: 1000,               // 跟随设备强度的检查间隔
 
     /* 加电曲线 */
     enabled: true,
@@ -477,7 +486,7 @@ var DEFAULT_CONFIG = {
     waveSpeed: 1,
     bWaveShiftFrames: 0,
     randomWaveform: false,
-    waveRotateMode: 'off',            // 波形轮换：关 / 顺序 / 随机
+    waveRotateMode: 'random',         // 波形轮换：随机 / 顺序 / 关
     waveRotateOnHit: true,            // 受伤时轮换
     waveRotateEveryN: 1,              // 每 N 次受伤换一次
     waveRotateIntervalSec: 0,         // 每隔 N 秒轮换（0 = 关）
@@ -506,12 +515,12 @@ var DEFAULT_CONFIG = {
     /* 界面 */
     showPanel: true,
     clientNotify: true,
-    notifyHurt: false,
-    notifyDeviceChange: false,
+    chatNotice: false,                // 常规提示（掉血、清电、死亡这些）默认不刷聊天栏
+    deviceZeroHintSec: 5,             // 发了强度但设备回报 0 多久后提示
     notifyMinIntervalMs: 0,
     panelCompact: false,
     hudEnabled: false,
-    tipEnabled: false,                // 用 showTipMessage 在屏幕上显示各通道数值
+    tipEnabled: true,                 // 用 showTipMessage 在屏幕上显示各通道数值
     tipIntervalMs: 1000,              // 刷新间隔（毫秒）
     tipContent: 'channel',            // channel = 各通道强度，both = 总电量+各通道，energy = 只看总电量
     tipSource: 'plan',                // plan = 脚本下发的值，device = 设备回传的值
@@ -531,6 +540,8 @@ var SETTING_DEFS = [
     { key: 'controllerId', cn: '固定配对编号', group: '连接', type: 'string' },
     { key: 'autoConnect', cn: '自动连接', group: '连接', type: 'bool' },
     { key: 'autoReconnect', cn: '断线重连', group: '连接', type: 'bool' },
+    { key: 'reconnectSec', cn: '重连间隔', group: '连接', type: 'float', min: 0.5, max: 30, step: 0.5 },
+    { key: 'heartbeatSec', cn: '心跳间隔', group: '连接', type: 'float', min: 5, max: 120, step: 5 },
     { key: 'offlineStopSec', cn: '连不上就自动停', group: '连接', type: 'float', min: 0, max: 600, step: 10 },
 
     { key: 'channel', cn: '控制通道', group: '通道', type: 'enum', values: ['A', 'B', 'AB'], labels: ['左路 A', '右路 B', '双路 A+B'], core: true },
@@ -539,6 +550,7 @@ var SETTING_DEFS = [
     { key: 'bWaveform', cn: '右路波形', group: '通道', type: 'enum', values: [''], labels: ['跟随主波形'] },
     { key: 'zeroBothChannels', cn: '归零清两路', group: '通道', type: 'bool' },
     { key: 'keepInSync', cn: '强制同步强度', group: '通道', type: 'bool' },
+    { key: 'keepInSyncMs', cn: '同步检查间隔', group: '通道', type: 'int', min: 300, max: 10000 },
 
     { key: 'enabled', cn: '总开关', group: '加电曲线', type: 'bool', core: true },
     { key: 'strengthPerDamage', cn: '每点伤害加电', group: '加电曲线', type: 'float', min: 0, max: 50, step: 0.5, core: true },
@@ -586,7 +598,7 @@ var SETTING_DEFS = [
 
     { key: 'deathMode', cn: '死亡处理', group: '死亡', type: 'enum', values: ['max', 'zero', 'none'], labels: ['电量拉满', '立即归零', '不处理'], core: true },
     { key: 'deathInstant', cn: '死亡瞬间拉满', group: '死亡', type: 'bool' },
-    { key: 'deathBurstSec', cn: '死亡波形时长', group: '死亡', type: 'float', min: 0, max: 30, step: 1 },
+    { key: 'deathBurstSec', cn: '死亡波形时长', group: '死亡', type: 'float', min: 0, max: 60, step: 0.5, core: true },
 
     { key: 'burstEnabled', cn: '受伤出波形', group: '波形', type: 'bool' },
     { key: 'waveform', cn: '波形', group: '波形', type: 'enum', values: [], core: true },
@@ -612,8 +624,8 @@ var SETTING_DEFS = [
 
     { key: 'showPanel', cn: '显示设置面板', group: '界面', type: 'bool', core: true },
     { key: 'clientNotify', cn: '本地消息提示', group: '界面', type: 'bool' },
-    { key: 'notifyHurt', cn: '每次掉血提示', group: '界面', type: 'bool' },
-    { key: 'notifyDeviceChange', cn: '设备强度变动提示', group: '界面', type: 'bool' },
+    { key: 'chatNotice', cn: '聊天栏提示', group: '界面', type: 'bool', core: true },
+    { key: 'deviceZeroHintSec', cn: '无输出提示延迟', group: '界面', type: 'float', min: 1, max: 60, step: 1 },
     { key: 'notifyMinIntervalMs', cn: '提示最小间隔', group: '界面', type: 'int', min: 0, max: 60000 },
     { key: 'panelCompact', cn: '面板只显示常用', group: '界面', type: 'bool', core: true },
     { key: 'hudEnabled', cn: '屏幕状态条', group: '界面', type: 'bool', core: true },
@@ -1171,10 +1183,10 @@ var DG = {
                 this.pendingStrength = null;
                 var appUrl = this.buildPairing(this.myId);
                 logAlways('设备已连接，配对地址', appUrl);
-                notice('设备已连接，当前强度 ' + Math.round(S.strength));
+                notice('设备已连接，当前强度 ' + Math.round(S.strength), true);
                 if (!S.powerHinted) {
                     S.powerHinted = true;
-                    notice('感觉不到电的话：APP 里打开「总开关」、关掉「屏蔽输出」');
+                    notice('感觉不到电的话：APP 里打开「总开关」、关掉「屏蔽输出」', true);
                 }
                 this.queueStrength(0);
                 this.flushStrength(nowMs(), true);   /* 配对瞬间要立刻生效，不受节流影响 */
@@ -1192,7 +1204,7 @@ var DG = {
             this.sentStrength = -1;
             if (this.state === 'paired') {
                 this.state = 'waiting';
-                notice('设备已断开，等待重新连接');
+                notice('设备已断开，等待重新连接', true);
             }
             return;
         }
@@ -1221,8 +1233,8 @@ var DG = {
                 this.device.B = Number(full[2]);
                 this.device.limitA = Number(full[3]);
                 this.device.limitB = Number(full[4]);
-                if (CONFIG.notifyDeviceChange && (oldA !== this.device.A || oldB !== this.device.B)) {
-                    notice('设备强度变化：左 ' + this.device.A + '　右 ' + this.device.B);
+                if (oldA !== this.device.A || oldB !== this.device.B) {
+                    noticeRoutine('设备强度变化：左 ' + this.device.A + '　右 ' + this.device.B);
                 }
                 log('设备强度回传 A=' + this.device.A + ' B=' + this.device.B);
                 return;
@@ -1294,13 +1306,13 @@ var DG = {
                 this.reconnectAt = 0;
                 this.connect(this.url());
             } else {
-                this.reconnectAt = t + 2000;   /* 暂停/关闭中：过 2 秒再看一次 */
+                this.reconnectAt = t + Math.round(clamp(CONFIG.reconnectSec, 0.5, 30) * 1000);
             }
         }
         if (this.state === 'paired') {
             var interval = 1000 / clamp(CONFIG.maxSendPerSec, 1, 50);
             if (this.pendingStrength !== null && t - this.lastSendAt >= interval) this.flushStrength(t);
-            if (t - this.lastHeartbeatAt > 30000) {
+            if (t - this.lastHeartbeatAt > clamp(CONFIG.heartbeatSec, 5, 120) * 1000) {
                 this.lastHeartbeatAt = t;
                 this.frame({
                     type: 'heartbeat',
@@ -1616,8 +1628,8 @@ function onDamage(dmg, t) {
         if (CONFIG.instantRise) applyStrengthNow(t);
     }
 
-    if (CONFIG.notifyHurt) {
-        notice('掉血 ' + round1(dmg) + (info.tags.length ? '（' + info.tags.join('、') + '）' : '') +
+    {
+        noticeRoutine('掉血 ' + round1(dmg) + (info.tags.length ? '（' + info.tags.join('、') + '）' : '') +
             '，电量 ' + round1(S.energy) + '，强度 ' + Math.round(S.strength));
     }
     log('受伤', round1(dmg), 'x' + info.mult, '电量', round1(S.energy), '波形到', S.chargeUntil - t, 'ms');
@@ -1643,7 +1655,7 @@ function onHeal(amount, t) {
             S.energy = 0;
             S.waveOverride = '';
             if (CONFIG.instantFall) applyStrengthNow(t);
-            if (hadEnergy) notice('回满血，电量已清');
+            if (hadEnergy) noticeRoutine('回满血，电量已清');
         } else {
             log('回血 ' + round1(amount) + '（没回满，电量保持 ' + round1(S.energy) + '）');
         }
@@ -1843,7 +1855,7 @@ function engineTick(t, dtMs) {
                 S.waveOverride = '';
                 S.comboCount = 0;
                 if (CONFIG.instantFall) applyStrengthNow(t);
-                notice('满血，电量已清');
+                noticeRoutine('满血，电量已清');
             }
         } else {
             S.fullHpSince = 0;
@@ -1898,10 +1910,10 @@ function engineTick(t, dtMs) {
         var devMax = Math.max(DG.device.A || 0, DG.device.B || 0);
         if (devMax <= 0) {
             if (!S.deviceZeroSince) S.deviceZeroSince = t;
-            else if (t - S.deviceZeroSince > 5000 && !S.deviceZeroHinted) {
+            else if (t - S.deviceZeroSince > clamp(CONFIG.deviceZeroHintSec, 1, 60) * 1000 && !S.deviceZeroHinted) {
                 S.deviceZeroHinted = true;
                 notice('发了 ' + Math.round((t - S.deviceZeroSince) / 1000) + ' 秒，设备回报强度一直是 0：' +
-                    '去 APP 打开「总开关」、关掉「屏蔽输出」（也可能是电极没接好）');
+                    '去 APP 打开「总开关」、关掉「屏蔽输出」（也可能是电极没接好）', true);
             }
         } else {
             S.deviceZeroSince = 0;
@@ -1912,7 +1924,7 @@ function engineTick(t, dtMs) {
     }
 
     /* 设备强度被手动改高时拉回来（可选） */
-    if (CONFIG.keepInSync && DG.state === 'paired' && t - DG.lastSendAt > 1000) {
+    if (CONFIG.keepInSync && DG.state === 'paired' && t - DG.lastSendAt > clamp(CONFIG.keepInSyncMs, 300, 10000)) {
         var plan = channelPlan();
         for (var i = 0; i < plan.length; i++) {
             var expect = Math.round(S.strength * plan[i].scale + plan[i].offset);
@@ -2006,7 +2018,7 @@ function pollVitals(t) {
                 S.decayFrom = S.energy;
                 S.decayStart = t;
                 S.decayUntil = t + Math.round(CONFIG.respawnDecaySec * 1000);
-                notice('复活：电量将在 ' + round1(CONFIG.respawnDecaySec) + ' 秒内回落到 0');
+                noticeRoutine('复活：电量将在 ' + round1(CONFIG.respawnDecaySec) + ' 秒内回落到 0');
                 log('复活回落开始', round1(S.decayFrom), '→ 0，用时', CONFIG.respawnDecaySec, '秒');
             }
         }
@@ -2021,10 +2033,10 @@ function pollVitals(t) {
                 S.nextPulseAt = 0;
             }
             if (CONFIG.deathInstant) applyStrengthNow(t);
-            notice('死亡：电量拉满 ' + round1(S.energy) + '，强度 ' + Math.round(S.strength));
+            noticeRoutine('死亡：电量拉满 ' + round1(S.energy) + '，强度 ' + Math.round(S.strength));
         } else if (CONFIG.deathMode === 'zero') {
             resetOutput('死亡');
-            notice('死亡：已归零');
+            noticeRoutine('死亡：已归零');
         }
     }
 }
