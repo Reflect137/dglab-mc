@@ -442,7 +442,7 @@ var DEFAULT_CONFIG = {
     startDelaySec: 0,
     stopBelowHp: 0,
     respawnGraceSec: 0,
-    respawnDecaySec: 0,               // 复活后几秒内回落到 0（0 = 关）
+    respawnDecaySec: 3,               // 复活后几秒内回落到 0（0 = 立刻清零）
     instantFall: true,
     maxRisePerSecond: 20,
     maxFallPerSecond: 30,
@@ -554,7 +554,7 @@ var SETTING_DEFS = [
     { key: 'startDelaySec', cn: '受伤后延迟加电', group: '加电曲线', type: 'float', min: 0, max: 5, step: 0.5 },
     { key: 'stopBelowHp', cn: '低于血量就停', group: '加电曲线', type: 'float', min: 0, max: 20, step: 0.5 },
     { key: 'respawnGraceSec', cn: '复活保护时间', group: '加电曲线', type: 'float', min: 0, max: 30, step: 1 },
-    { key: 'respawnDecaySec', cn: '复活后回落秒数', group: '死亡', type: 'float', min: 0, max: 60, step: 1 },
+    { key: 'respawnDecaySec', cn: '复活后回落秒数', group: '死亡', type: 'float', min: 0, max: 60, step: 1, core: true },
     { key: 'instantFall', cn: '回血瞬间回落', group: '加电曲线', type: 'bool' },
     { key: 'maxRisePerSecond', cn: '每秒最大涨幅', group: '加电曲线', type: 'float', min: 0.5, max: 200, step: 0.5 },
     { key: 'maxFallPerSecond', cn: '每秒最大回落', group: '加电曲线', type: 'float', min: 0.5, max: 200, step: 0.5 },
