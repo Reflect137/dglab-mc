@@ -22,13 +22,15 @@ pkg update -y && pkg install -y git nodejs && (git -C ~/dglab-mc pull --ff-only 
 4. APP → Socket 控制 → 地址填 `ws://127.0.0.1:9999/mc-coyote`
 5. APP 里打开`总开关`、关掉`屏蔽输出`
 
-配对成功游戏里会弹一条消息，之后挨打就有电了。
+配对成功游戏里会弹一条消息，然后你就可以使用此项目了
 
-脚本这样拿（存到 `/sdcard/Download/`）：
+脚本这样获取：
 
 ```bash
 bash ~/dglab-mc/tools/get-game-script.sh
 ```
+
+执行后脚本会下载到/sdcard/Download/，自行复制到跑路脚本目录里
 
 ## 更新
 
@@ -84,10 +86,3 @@ bash ~/dglab-mc/tools/get-game-script.sh
 | 面板只剩几项 / 整个不见了 | 点「显示全部设置」；整个关了就聊天栏敲 `!dg panel` |
 
 排查用 `dglab --verbose` 启动，能看到每条协议消息。
-
-## 其它
-
-- 中继是自己写的 DG-LAB V3 服务端，零依赖，格式跟官方 `wss://ws.dungeon-lab.cn/` 对过，所以服务器地址填官方那条也能用。
-- 默认只监听本机、没有密码，别改成 `--host 0.0.0.0`（同 Wi-Fi 的人都能控制你的设备）。
-- 先小后大，第一次每点伤害加电设 1、强度上限设 10。电极别贴心脏、脖子、头部。
-- 内置波形来自 [dglab-kit](https://github.com/dungeonlab-open/dglab-kit)，本项目跟着用 GPL-3.0。
