@@ -898,6 +898,7 @@ var S = {
     creativeSince: 0,     // 连续处于创造/旁观的起始时间
     leavingWorld: false,  // 正在退出世界（别把实体消失误判成死亡）
     noPlayerSince: 0,     // 连续读不到玩家的起始时间
+    connErrReported: false,   // 这次断线是否已经报过错（只报一次）
     hpReadAt: 0,          // 最近一次读到血量的时间
     unloaded: false,      // 已一键退出（所有回调空转）
     quitArmed: false,     // 面板上"退出"按钮已点过一次
@@ -1123,15 +1124,24 @@ var DG = {
             ws.setOnErrorListener(function (err) {
                 if (self.ws !== ws) return;
                 try {
-                    reportError('连不上中继', new Error(String(err)),
-                        '先确认 Termux 里 dglab 还在跑（地址 ' + url + '）');
+                    /* 一次断线只报一条：重连是每 2 秒试一次的，全报出来会刷屏 */
+                    if (!S.connErrReported) {
+                        S.connErrReported = true;
+                        reportError('连不上中继', new Error(String(err)),
+                            '先确认 Termux 里 dglab 还在跑（地址 ' + url + '）');
+                    } else {
+                        log('连不上中继（已经报过一次了，不再刷）');
+                    }
                 } catch (e) {
                     /* 忽略 */
                 }
             });
             ws.connect();
         } catch (e) {
-            reportError('连接中继失败', e, '先确认 Termux 里 dglab 还在跑（地址 ' + url + '）');
+            if (!S.connErrReported) {
+                S.connErrReported = true;
+                reportError('连接中继失败', e, '先确认 Termux 里 dglab 还在跑（地址 ' + url + '）');
+            }
             this.state = 'closed';
             return false;
         }
@@ -1309,6 +1319,7 @@ var DG = {
             if (paired) {
                 this.myId = data.clientId;
                 this.appId = data.targetId;
+                S.connErrReported = false;      // 连上了，下次再断线可以重新报一次
                 this.state = 'paired';
                 this.sentStrength = -1;
                 this.pendingStrength = null;
@@ -1323,6 +1334,7 @@ var DG = {
                 this.flushStrength(nowMs(), true);   /* 配对瞬间要立刻生效，不受节流影响 */
             } else if (!data.targetId) {
                 this.myId = data.clientId;
+                S.connErrReported = false;      // 连上了（等 APP），下次再断线可以重新报一次
                 this.state = 'waiting';
                 var url = this.buildPairing(this.myId);
                 logAlways('等待 APP 连接:', url);
@@ -2462,7 +2474,6 @@ function dglabReady() {
     keepHooked('进入世界');
     var line = '';
     if (miss.length) line += '!! 缺少模块：' + miss.join('、');
-    if (ERR_COUNT > 0) line += (line ? '｜' : '') + '出过错 ' + ERR_COUNT + ' 次，!dg errors 查看';
     if (!CONFIG.showPanel) line += (line ? '｜' : '') + '面板关着，聊天栏敲 !dg panel 打开';
     if (line) chat('[DG-LAB] ' + line);
     if (!CONFIG.showPanel) {
@@ -3203,8 +3214,6 @@ function drawPanel() {
             if (CONFIG.panelCompact && UI.button('显示全部设置##btn_expand')) {
                 setSetting('panelCompact', false);   // 紧凑模式下的逃生口
             }
-            if (ERR_COUNT > 0) UI.text('错误 ' + ERR_COUNT + ' 次：' + String(S.lastError || '').slice(0, 80));
-            else if (S.lastError) UI.text('最近错误：' + S.lastError);
             UI.separator();
 
             if (!SETTINGS_BY_GROUP.length) buildGroupIndex();
