@@ -2103,6 +2103,19 @@ function engineTick(t, dtMs) {
 
 /* ---- 10. 每个游戏刻 ---- */
 
+/* 只按血量判断：满血才会减电（回落），没满一点都不减 */
+function hpVerdict(t) {
+    if (S.lastHp === null || !(S.lastMaxHp > 0)) return '血量还没读到';
+    if (!CONFIG.healReduces) return '回血减电已关';
+    if (S.lastHp <= 0.01) return '死亡中';
+    if (S.lastHp >= S.lastMaxHp - 0.01) {
+        if (S.decayUntil > t) return '满血, 回落中（' + round1((S.decayUntil - t) / 1000) + ' 秒后归零）';
+        if (CONFIG.respawnDecaySec > 0) return '满血, ' + round1(CONFIG.respawnDecaySec) + ' 秒内滑到 0';
+        return '满血, 立刻清零';
+    }
+    return '没回满, 电量只加不减';
+}
+
 function pollVitals(t) {
     var p = resolvePlayer();
     if (!p) {
@@ -2655,6 +2668,7 @@ function handleCommand(msg) {
         chat('  清电记录 ' + (zc.length ? zc.join(' ｜ ') : '无') +
             (S.zeroLastWhy ? '（最近一次：' + S.zeroLastWhy + '，' +
                 Math.round((nowMs() - S.zeroLastAt) / 1000) + ' 秒前）' : ''));
+        chat('  判定 ' + hpVerdict(nowMs()));
         chat('  会清电的设置 最低输出=' + round1(CONFIG.minOutputEnergy) +
             ' ｜ 自然回落=' + round1(CONFIG.decayPerSec) + '/秒（保持 ' + round1(CONFIG.holdSec) + ' 秒后）' +
             ' ｜ 满血自动清=' + (CONFIG.clearWhenFullHp ? '开' : '关') +
@@ -3058,7 +3072,7 @@ function drawPanel() {
             UI.text('下发强度：' + Math.round(S.strength) +
                 '　电量：' + round1(S.energy) + ' / ' + energyCapValue());
             UI.text('血量：' + (S.lastHp === null ? '—' : round1(S.lastHp)) + ' / ' + S.lastMaxHp +
-                '　上次掉血：' + round1(S.lastDamage));
+                '　' + hpVerdict(t) + '　上次掉血：' + round1(S.lastDamage));
             UI.text('波形剩余：' + (S.chargeUntil > t ? round1((S.chargeUntil - t) / 1000) + ' 秒' : '无') +
                 '　累计：' + S.stats.hits + ' 次 / ' + round1(S.stats.damage));
             var addAgo = S.lastAddAt ? round1((t - S.lastAddAt) / 1000) : -1;
