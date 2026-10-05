@@ -2512,6 +2512,8 @@ function handleCommand(msg) {
         chat('  设备回报 A=' + (DG.device.A || 0) + ' B=' + (DG.device.B || 0) +
             ' 上限 A=' + (DG.device.limitA || 0) + ' B=' + (DG.device.limitB || 0) +
             '（回报一直 0：上限是 0 就先调上限，否则看总开关/屏蔽输出/电极）');
+        chat('  下发强度 上次发出 A=' + (DG.sentStrength < 0 ? '未发过' : DG.sentStrength) +
+            '（设备回报若一直是 0，就是 APP 那边没输出，不是脚本没发）');
         chat('  数值 电量' + round1(S.energy) + ' 强度' + Math.round(S.strength) + ' 通道' + CONFIG.channel +
             ' 血量' + (S.lastHp === null ? '-' : round1(S.lastHp) + '/' + round1(S.lastMaxHp)) +
             ' 总开关' + (CONFIG.enabled ? '开' : '关') + (S.paused ? '(暂停)' : '') +
