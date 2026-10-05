@@ -2613,7 +2613,7 @@ function setSetting(key, raw, save, quiet) {
         chat('[DG-LAB] 面板已关闭。想再打开：聊天栏敲 !dg panel');
     }
     if (!quiet) {
-        chat('[DG-LAB] ' + def.cn + ' = ' + v + (save ? '（未保存，敲 !dg save 或点面板「保存设置」）' : ''));
+        chat('[DG-LAB] ' + def.cn + ' = ' + v + (save ? '（未保存）' : ''));
     }
     log('设置', key, '=', v);
     return true;
@@ -2750,8 +2750,7 @@ function handleCommand(msg) {
         chat('  清电记录 ' + (zc.length ? zc.join(' ｜ ') : '无') +
             (S.zeroLastWhy ? '（最近一次：' + S.zeroLastWhy + '，' +
                 Math.round((nowMs() - S.zeroLastAt) / 1000) + ' 秒前）' : ''));
-        chat('  设置存档 ' + (S.configDirty ? '有未保存的改动（!dg save 保存）' : '已保存') +
-            '（现在改设置不会自动存了）');
+        chat('  设置存档 ' + (S.configDirty ? '有未保存的改动' : '已保存') + '（改设置不会自动存）');
         chat('  判定 ' + hpVerdict(nowMs()));
         chat('  会清电的设置 最低输出=' + round1(CONFIG.minOutputEnergy) +
             ' ｜ 自然回落=' + round1(CONFIG.decayPerSec) + '/秒（保持 ' + round1(CONFIG.holdSec) + ' 秒后）' +
@@ -3228,8 +3227,6 @@ function drawPanel() {
             }
 
             UI.separator();
-            UI.separator();
-            if (S.configDirty) UI.text('!! 有未保存的改动：点下面「保存设置」，或敲 !dg save');
             if (UI.button(S.quitArmed ? '再点一次确认退出脚本##btn_quit' : '一键退出脚本##btn_quit')) {
                 if (S.quitArmed) {
                     /* 不能在这里直接退出：ImGui 的 Begin 必须配上 End，
@@ -3265,6 +3262,7 @@ function drawPanel() {
                 }
             }
             UI.sameLine();
+            if (S.configDirty) UI.text('!! 有未保存的改动');
             if (UI.button('保存设置##btn_save')) {
                 var saved = saveConfig();
                 S.configDirty = false;
