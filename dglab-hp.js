@@ -2116,8 +2116,17 @@ function dglabReady() {
     var line = '[DG-LAB] 已加载 v' + SCRIPT_VER + '，' + SETTING_DEFS.length + ' 项设置';
     if (miss.length) line += '｜⚠️ 缺少模块：' + miss.join('、');
     if (ERR_COUNT > 0) line += '｜加载过程中出错 ' + ERR_COUNT + ' 次，输入 !dg errors 查看';
-    if (!CONFIG.showPanel) line += '｜面板当前是关闭的，聊天栏敲 !dg panel 打开';
-    else if (CONFIG.panelCompact) line += '｜面板是紧凑模式，点「显示全部设置」展开';
+    if (!CONFIG.showPanel) {
+        line += '｜面板当前是关闭的，聊天栏敲 !dg panel 打开';
+        /* 聊天栏容易被刷掉，再往屏幕顶部提示一次 */
+        try {
+            if (MOD.minecraft && MOD.minecraft.showTipMessage) {
+                MOD.minecraft.showTipMessage('[DG-LAB] 面板关着：聊天栏敲 !dg panel 打开');
+            }
+        } catch (e) { /* 忽略 */ }
+    } else if (CONFIG.panelCompact) {
+        line += '｜面板是紧凑模式，点「显示全部设置」展开';
+    }
     chat(line);
 }
 
@@ -2343,7 +2352,8 @@ function handleCommand(msg) {
         chat('  模块 ' + modList.join(' '));
         chat('  全局 ' + (findGlobal() ? '有' : '没有') + '｜面板 showPanel=' + CONFIG.showPanel +
             ' compact=' + CONFIG.panelCompact + ' hud=' + CONFIG.hudEnabled +
-            '｜ImGui签名=' + (UI.sig.begin || 0) + ' 画不出帧=' + (S.panelFailFrames || 0) + ' UI.ok=' + UI.ok);
+            '｜ImGui签名=' + (UI.sig.begin || 0) + ' 画不出帧=' + (S.panelFailFrames || 0) +
+            ' 正常帧=' + (S.panelFrames || 0) + ' UI.ok=' + UI.ok);
         chat('  中继 ' + DG.state + '｜' + DG.url() + '｜id=' + (DG.myId || '-') + '｜app=' + (DG.appId || '-'));
         chat('  数值 电量' + round1(S.energy) + ' 强度' + Math.round(S.strength) + ' 通道' + CONFIG.channel +
             ' 血量' + (S.lastHp === null ? '-' : round1(S.lastHp) + '/' + round1(S.lastMaxHp)) +
@@ -2764,7 +2774,15 @@ function drawPanel() {
     }
 
     try { UI.end(); } catch (e) { /* 面板收尾失败就算了 */ }
-    if (avShow && avShow.value === false) setSetting('showPanel', false, true, true);
+    if (open !== false) {
+        S.panelFrames = (S.panelFrames || 0) + 1;      // 正常画出来的帧数
+    } else if (avShow && avShow.value === false && S.panelFrames > 30) {
+        /* 用户点了窗口的关闭：Begin 返回 false 且可见性被置 false，这才算数。
+         * 有的引擎会把 AccessValue 乱写成 false（窗口其实开着），那种不能信，
+         * 否则面板会自己关掉并存进存档，下次进世界再也不显示。 */
+        log('面板被用户关闭，记住这个选择');
+        setSetting('showPanel', false, true, true);
+    }
 }
 
 function drawHud() {
