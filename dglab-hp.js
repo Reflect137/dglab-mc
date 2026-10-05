@@ -719,6 +719,7 @@ function loadConfig() {
         }
     }
     fixPanelSetting();
+    fixDeathModeSetting();
     fixHealModeSetting();
     fixTipSetting();
     fixDecaySetting();
@@ -744,6 +745,26 @@ function fixPanelSetting() {
         }
         MOD.sp.putBoolean(key, true);
     } catch (e2) { /* 存档读不了就算了 */ }
+}
+
+/* 一次性：「死亡处理」恢复成默认的"电量拉满"（存档里如果是归零/不处理就改回来） */
+function fixDeathModeSetting() {
+    if (!spAvailable()) return;
+    var key = SP_PREFIX + 'deathFix1';
+    var saved = false;
+    try { saved = MOD.sp.contains(SP_PREFIX + 'deathMode'); } catch (e0) { saved = false; }
+    if (!saved) return;
+    var done = false;
+    try { done = MOD.sp.getBoolean(key); } catch (e) { done = false; }
+    if (done) return;
+    try {
+        if (CONFIG.deathMode !== DEFAULT_CONFIG.deathMode) {
+            CONFIG.deathMode = DEFAULT_CONFIG.deathMode;
+            try { MOD.sp.putString(SP_PREFIX + 'deathMode', CONFIG.deathMode); } catch (e2) { /* 忽略 */ }
+            chat('[DG-LAB] 「死亡处理」已改回默认的电量拉满（想归零/不处理就在面板里选）');
+        }
+        MOD.sp.putBoolean(key, true);
+    } catch (e3) { /* 忽略 */ }
 }
 
 /* 一次性：「回血怎么减」以前默认是"回满血才清"，现在默认按回血比例减 */
@@ -807,16 +828,16 @@ function fixDecaySetting() {
     } catch (e3) { /* 存档读不了就算了 */ }
 }
 
-/* 改设置先记个标记，过一小会儿再真正写 sp：拖滑条时不会每帧写 93 项 */
-function scheduleSave() {
-    S.saveDirty = true;
-    S.saveDueAt = nowMs() + 400;
+/* 改设置只记个"有未保存的改动"标记，不自动写 sp。
+ * 要落盘必须玩家自己动手：面板最下面的「保存设置」按钮，或者聊天栏 !dg save。 */
+function markDirty() {
+    S.configDirty = true;
 }
 
-/* 真正落盘（!dg save、面板「保存设置」、退出世界时调用） */
+/* 真正落盘（「保存设置」按钮 / !dg save / !dg reset 时调用） */
 function flushSave() {
-    if (!S.saveDirty) return false;
-    S.saveDirty = false;
+    if (!S.configDirty) return false;
+    S.configDirty = false;
     return saveConfig();
 }
 
@@ -881,6 +902,7 @@ var S = {
     unloaded: false,      // 已一键退出（所有回调空转）
     quitArmed: false,     // 面板上"退出"按钮已点过一次
     quitPending: false,   // 等这一帧面板收尾后再退出
+    configDirty: false,   // 有未保存的设置改动（改了设置不会自动存）
     offlineStop: false,   // 连不上太久，已自动停止输出
     waveHits: 0,          // 距离上次轮换累计的受伤次数
     waveSwitchAt: 0,      // 延迟轮换的到点时间（0 = 没有待切换）
@@ -2342,7 +2364,6 @@ function dglabTick() {
     }
     try {
         tickTip(t);
-        if (S.saveDirty && t >= S.saveDueAt) flushSave();
     } catch (e) {
         reportError('屏幕提示（tickTip）', e);
     }
@@ -2417,7 +2438,6 @@ function dglabReady() {
     S.leavingWorld = false;      // 又进世界了
     S.noPlayerSince = 0;
     S.hpReadAt = 0;
-    flushSave();                 /* 上一局改的设置先落盘，再读回来 */
     try {
         if (!S.inited) init('onReadyEvent');
         else {
@@ -2455,6 +2475,7 @@ function dglabReady() {
 }
 
 function dglabLeave() {
+    if (S.configDirty) chat('[DG-LAB] 有未保存的设置改动（本次没写进存档）：下次改完记得敲 !dg save');
     S.leavingWorld = true;
     S.deathHandled = false;      // 退出世界不算死亡
     resetOutput('退出世界');
@@ -2555,6 +2576,9 @@ function setSetting(key, raw, save, quiet) {
         key === 'pulseLeadMs') {
         S.nextPulseAt = 0;
     }
+    if (key === 'deathMode') {
+        try { if (spAvailable()) MOD.sp.putBoolean(SP_PREFIX + 'deathFix1', true); } catch (e) { /* 忽略 */ }
+    }
     if (key === 'healMode') {
         try { if (spAvailable()) MOD.sp.putBoolean(SP_PREFIX + 'healFix1', true); } catch (e) { /* 忽略 */ }
     }
@@ -2581,14 +2605,15 @@ function setSetting(key, raw, save, quiet) {
                 if (spAvailable()) MOD.sp.putBoolean(SP_PREFIX + 'panelFix2', true);
             } catch (e) { /* 忽略 */ }
         }
-        if (quiet) scheduleSave();     // 面板拖滑条：延迟存，别每帧写 93 项
-        else saveConfig();             // 指令改的：立刻存
+        markDirty();                   // 只标记，不自动存（要玩家自己保存）
     }
     /* 面板刚被关掉：当场说一句怎么打开，免得下次进世界找不到 */
     if (key === 'showPanel' && !v) {
         chat('[DG-LAB] 面板已关闭。想再打开：聊天栏敲 !dg panel');
     }
-    if (!quiet) chat('[DG-LAB] ' + def.cn + ' = ' + v);
+    if (!quiet) {
+        chat('[DG-LAB] ' + def.cn + ' = ' + v + (save ? '（未保存，敲 !dg save 或点面板「保存设置」）' : ''));
+    }
     log('设置', key, '=', v);
     return true;
 }
@@ -2724,6 +2749,8 @@ function handleCommand(msg) {
         chat('  清电记录 ' + (zc.length ? zc.join(' ｜ ') : '无') +
             (S.zeroLastWhy ? '（最近一次：' + S.zeroLastWhy + '，' +
                 Math.round((nowMs() - S.zeroLastAt) / 1000) + ' 秒前）' : ''));
+        chat('  设置存档 ' + (S.configDirty ? '有未保存的改动（!dg save 保存）' : '已保存') +
+            '（现在改设置不会自动存了）');
         chat('  判定 ' + hpVerdict(nowMs()));
         chat('  会清电的设置 最低输出=' + round1(CONFIG.minOutputEnergy) +
             ' ｜ 自然回落=' + round1(CONFIG.decayPerSec) + '/秒（保持 ' + round1(CONFIG.holdSec) + ' 秒后）' +
@@ -2765,8 +2792,9 @@ function handleCommand(msg) {
         return true;
     }
     if (cmd === 'save') {
-        S.saveDirty = true;                       // 先把待存的改动一起写下去
-        chat(flushSave() ? '[DG-LAB] 设置已保存' : '[DG-LAB] 保存失败（sp 不可用）');
+        var okSave = saveConfig();
+        S.configDirty = false;
+        chat(okSave ? '[DG-LAB] 设置已保存' : '[DG-LAB] 保存失败（sp 不可用）');
         return true;
     }
     if (cmd === 'load') {
@@ -3203,6 +3231,7 @@ function drawPanel() {
 
             UI.separator();
             UI.separator();
+            if (S.configDirty) UI.text('!! 有未保存的改动：点下面「保存设置」，或敲 !dg save');
             if (UI.button(S.quitArmed ? '再点一次确认退出脚本##btn_quit' : '一键退出脚本##btn_quit')) {
                 if (S.quitArmed) {
                     /* 不能在这里直接退出：ImGui 的 Begin 必须配上 End，
@@ -3239,10 +3268,9 @@ function drawPanel() {
             }
             UI.sameLine();
             if (UI.button('保存设置##btn_save')) {
-                flushSave();
-                if (!S.saveDirty) saveConfig();
-                S.saveDirty = false;
-                notice('设置已保存');
+                var saved = saveConfig();
+                S.configDirty = false;
+                notice(saved ? '设置已保存' : '保存失败（sp 不可用）');
             }
             UI.sameLine();
             if (UI.button('配对信息##btn_pair')) showPairing();
@@ -3431,6 +3459,11 @@ var API = {
     S: S,
     DG: DG,
     init: init,
+    save: function () {           // 手动保存（面板按钮 / !dg save 走的是同一条路）
+        var ok = saveConfig();
+        S.configDirty = false;
+        return ok;
+    },
     connectRelay: connectRelay,
     onTickEvent: onTickEvent,
     onReadyEvent: onReadyEvent,
