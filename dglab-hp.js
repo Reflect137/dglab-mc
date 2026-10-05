@@ -381,7 +381,7 @@ function resolveWaveform(text) {
     if (WAVE_FRAMES[t]) return t;
     var up = t.toUpperCase();
     if (WAVE_FRAMES[up]) return up;
-    /* 中文名：先全等，再模糊（!dg wave 心跳 → HEARTBEAT 心跳节奏） */
+    /* 中文名：先全等，再模糊（!dg wave 心跳 -> HEARTBEAT 心跳节奏） */
     for (var i = 0; i < WAVE_IDS.length; i++) {
         if (WAVEFORM_DATA[WAVE_IDS[i]].cn === t) return WAVE_IDS[i];
     }
@@ -832,6 +832,8 @@ var S = {
     powerHinted: false,   // 本次世界是否已提示过「总开关/屏蔽输出」
     deviceZeroSince: 0,   // 设备回报强度一直是 0 的起始时间
     deviceZeroHinted: false,
+    unloaded: false,      // 已一键退出（所有回调空转）
+    quitArmed: false,     // 面板上"退出"按钮已点过一次
     offlineStop: false,   // 连不上太久，已自动停止输出
     waveHits: 0,          // 距离上次轮换累计的受伤次数
     waveSwitchAt: 0,      // 延迟轮换的到点时间（0 = 没有待切换）
@@ -1316,7 +1318,7 @@ var DG = {
         this.pendingStrength = null;
         logAlways('连接关闭 code=' + code + ' reason=' + (reason || '-'));
         if (was === 'paired') chat('[DG-LAB] 与中继断开');
-        /* 暂停时也排上重连计划，否则「暂停→掉线→恢复」后永远不重连 */
+        /* 暂停时也排上重连计划，否则「暂停->掉线->恢复」后永远不重连 */
         if (CONFIG.autoReconnect) {
             var wait = Math.min(30000, 2000 * Math.pow(2, Math.min(this.retry, 4)));
             this.retry++;
@@ -1710,7 +1712,7 @@ function onHeal(amount, t, energyBefore) {
                 S.decayUntil = t + Math.round(CONFIG.respawnDecaySec * 1000);
                 S.decayWhy = '满血';
                 noticeRoutine('回满血：电量将在 ' + round1(CONFIG.respawnDecaySec) + ' 秒内回落到 0');
-                log('满血回落开始', round1(from), '→ 0，用时', CONFIG.respawnDecaySec, '秒');
+                log('满血回落开始', round1(from), '-> 0，用时', CONFIG.respawnDecaySec, '秒');
             } else {
                 S.energy = 0;
                 if (CONFIG.instantFall) applyStrengthNow(t);
@@ -1807,7 +1809,7 @@ function rotateWave(t) {
     S.nextPulseAt = 0;         // 立刻用新波形，不等当前这段放完
     S.waveHits = 0;
     S.lastWaveSwitchAt = t;
-    log('波形轮换 →', S.waveNow);
+    log('波形轮换 ->', S.waveNow);
     return true;
 }
 
@@ -1977,8 +1979,14 @@ function engineTick(t, dtMs) {
             if (!S.deviceZeroSince) S.deviceZeroSince = t;
             else if (t - S.deviceZeroSince > clamp(CONFIG.deviceZeroHintSec, 1, 60) * 1000 && !S.deviceZeroHinted) {
                 S.deviceZeroHinted = true;
-                notice('发了 ' + Math.round((t - S.deviceZeroSince) / 1000) + ' 秒，设备回报强度一直是 0：' +
-                    '去 APP 打开「总开关」、关掉「屏蔽输出」（也可能是电极没接好）', true);
+                var lim = Math.max(DG.device.limitA || 0, DG.device.limitB || 0);
+                if (lim <= 0) {
+                    notice('发了 ' + Math.round((t - S.deviceZeroSince) / 1000) + ' 秒，强度一直是 0：' +
+                        'APP 上报的通道强度上限是 0，去 APP 把对应通道的上限调上去', true);
+                } else {
+                    notice('发了 ' + Math.round((t - S.deviceZeroSince) / 1000) + ' 秒，强度一直是 0（APP 上限 ' +
+                        lim + '）：去 APP 打开「总开关」、关掉「屏蔽输出」，或检查电极/通道是否接好', true);
+                }
             }
         } else {
             S.deviceZeroSince = 0;
@@ -2092,7 +2100,7 @@ function pollVitals(t) {
                     S.decayUntil = t + Math.round(CONFIG.respawnDecaySec * 1000);
                     S.decayWhy = '复活';
                     noticeRoutine('复活：电量将在 ' + round1(CONFIG.respawnDecaySec) + ' 秒内回落到 0');
-                    log('复活回落开始', round1(back), '→ 0，用时', CONFIG.respawnDecaySec, '秒');
+                    log('复活回落开始', round1(back), '-> 0，用时', CONFIG.respawnDecaySec, '秒');
                 }
             }
         }
@@ -2211,7 +2219,7 @@ function init(reason) {
     S.lastTickAt = nowMs();
     logAlways('v' + SCRIPT_VER + ' 已加载（' + reason + '）：中继 ' + CONFIG.relayUrl +
         '，通道 ' + CONFIG.channel + '，波形 ' + waveformName(CONFIG.waveform));
-    if (!MOD.socket) logAlways('⚠ 没有 socket 模块，无法连接 DG-LAB');
+    if (!MOD.socket) logAlways('!! 没有 socket 模块，无法连接 DG-LAB');
     if (CONFIG.autoConnect) connectRelay(false);
 }
 
@@ -2249,7 +2257,7 @@ function dglabReady() {
     if (!MOD.sp) miss.push('sp（设置无法保存）');
     keepHooked('进入世界');
     var line = '';
-    if (miss.length) line += '⚠️ 缺少模块：' + miss.join('、');
+    if (miss.length) line += '!! 缺少模块：' + miss.join('、');
     if (ERR_COUNT > 0) line += (line ? '｜' : '') + '出过错 ' + ERR_COUNT + ' 次，!dg errors 查看';
     if (!CONFIG.showPanel) line += (line ? '｜' : '') + '面板关着，聊天栏敲 !dg panel 打开';
     if (line) chat('[DG-LAB] ' + line);
@@ -2312,9 +2320,9 @@ function showPairing() {
         return;
     }
     var appUrl = DG.buildPairing(DG.myId);
-    chat('[DG-LAB] ① APP 手动输入地址: ' + appUrl);
-    chat('[DG-LAB] ② 要扫码就把这行丢到别的设备生成二维码: ' + DG.qrLink(appUrl));
-    chat('[DG-LAB] ③ 中继地址: ' + CONFIG.relayUrl + '（当前 ' + DG.state + '）');
+    chat('[DG-LAB] 1) APP 手动输入地址: ' + appUrl);
+    chat('[DG-LAB] 2) 要扫码就把这行丢到别的设备生成二维码: ' + DG.qrLink(appUrl));
+    chat('[DG-LAB] 3) 中继地址: ' + CONFIG.relayUrl + '（当前 ' + DG.state + '）');
 }
 
 function setSetting(key, raw, save, quiet) {
@@ -2489,12 +2497,12 @@ function handleCommand(msg) {
     if (cmd === 'diag' || cmd === '诊断') {
         chat('[DG-LAB] 诊断 v' + SCRIPT_VER + '｜刻 ' + S.tickCount + '｜错误 ' + ERR_COUNT + ' 次');
         var modList = [];
-        modList.push('socket' + (MOD.socket && MOD.socket.WebSocket ? '✓' : '✗'));
-        modList.push('player' + (MOD.player ? '✓' : '✗'));
-        modList.push('sp' + (MOD.sp ? '✓' : '✗'));
-        modList.push('minecraft' + (MOD.minecraft ? '✓' : '✗'));
-        modList.push('ImGui' + (MOD.ImGui ? '✓' : '✗'));
-        modList.push('world' + (MOD.world ? '✓' : '✗'));
+        modList.push('socket' + (MOD.socket && MOD.socket.WebSocket ? 'ok' : '--'));
+        modList.push('player' + (MOD.player ? 'ok' : '--'));
+        modList.push('sp' + (MOD.sp ? 'ok' : '--'));
+        modList.push('minecraft' + (MOD.minecraft ? 'ok' : '--'));
+        modList.push('ImGui' + (MOD.ImGui ? 'ok' : '--'));
+        modList.push('world' + (MOD.world ? 'ok' : '--'));
         chat('  模块 ' + modList.join(' '));
         chat('  全局 ' + (findGlobal() ? '有' : '没有') + '｜面板 showPanel=' + CONFIG.showPanel +
             ' compact=' + CONFIG.panelCompact + ' hud=' + CONFIG.hudEnabled +
@@ -2502,7 +2510,8 @@ function handleCommand(msg) {
             ' 正常帧=' + (S.panelFrames || 0) + ' UI.ok=' + UI.ok);
         chat('  中继 ' + DG.state + '｜' + DG.url() + '｜id=' + (DG.myId || '-') + '｜app=' + (DG.appId || '-'));
         chat('  设备回报 A=' + (DG.device.A || 0) + ' B=' + (DG.device.B || 0) +
-            '（发了强度但这里一直是 0 = APP 没开总开关或开着屏蔽）');
+            ' 上限 A=' + (DG.device.limitA || 0) + ' B=' + (DG.device.limitB || 0) +
+            '（回报一直 0：上限是 0 就先调上限，否则看总开关/屏蔽输出/电极）');
         chat('  数值 电量' + round1(S.energy) + ' 强度' + Math.round(S.strength) + ' 通道' + CONFIG.channel +
             ' 血量' + (S.lastHp === null ? '-' : round1(S.lastHp) + '/' + round1(S.lastMaxHp)) +
             ' 总开关' + (CONFIG.enabled ? '开' : '关') + (S.paused ? '(暂停)' : '') +
@@ -2511,7 +2520,7 @@ function handleCommand(msg) {
         var has = [];
         for (var wi = 0; wi < ['Button', 'Checkbox', 'SliderInt', 'SliderFloat', 'Combo', 'InputText', 'Text', 'SameLine', 'Separator', 'Spacing'].length; wi++) {
             var wn = ['Button', 'Checkbox', 'SliderInt', 'SliderFloat', 'Combo', 'InputText', 'Text', 'SameLine', 'Separator', 'Spacing'][wi];
-            has.push(wn + (typeof g[wn] === 'function' ? '✓' : '✗'));
+            has.push(wn + (typeof g[wn] === 'function' ? 'ok' : '--'));
         }
         chat('  控件 ' + has.join(' ') + '｜用了 整数=' + (UI.sig.sliderInt || '无') + ' 小数=' + (UI.sig.sliderFloat || '无'));
         chat('  忽略的加电 伤害太小' + S.skip.min + ' ｜ 归零静默' + S.skip.zeroHold +
@@ -2539,6 +2548,10 @@ function handleCommand(msg) {
         var ls = fmtConfigList();
         for (var j = 0; j < ls.length; j++) chat('[DG-LAB] ' + ls[j]);
         chat('[DG-LAB] 波形: ' + waveformListText());
+        return true;
+    }
+    if (cmd === 'quit' || cmd === 'exit' || cmd === '退出') {
+        unloadScript();
         return true;
     }
     if (cmd === 'save') {
@@ -2781,7 +2794,7 @@ function drawBool(def) {
     if (av.value !== before) setSetting(def.key, av.value, true, true);
 }
 
-/* 一行一个数字设置：文字 + [−][+] 按钮（按钮最通用的，滑条拖不准就用它点） */
+/* 一行一个数字设置：滑条为主；引擎画不出滑条时才退化成 [-] [+] 按钮 */
 function drawNumber(def) {
     var isInt = def.type === 'int';
     var min = def.min === undefined ? 0 : def.min;
@@ -2801,12 +2814,12 @@ function drawNumber(def) {
     /* 引擎连滑条都画不出来（很少见）：退化成文字 + 加减按钮，至少还能调 */
     UI.text(def.cn + '：' + fmtNum(v));
     UI.sameLine();
-    if (UI.button('−##m_' + def.key)) nudgeSetting(def.key, v - step, min, max, isInt);
+    if (UI.button('-##m_' + def.key)) nudgeSetting(def.key, v - step, min, max, isInt);
     UI.sameLine();
     if (UI.button('+##p_' + def.key)) nudgeSetting(def.key, v + step, min, max, isInt);
     if (big !== step) {
         UI.sameLine();
-        if (UI.button('−−##mm_' + def.key)) nudgeSetting(def.key, v - big, min, max, isInt);
+        if (UI.button('--##mm_' + def.key)) nudgeSetting(def.key, v - big, min, max, isInt);
         UI.sameLine();
         if (UI.button('++##pp_' + def.key)) nudgeSetting(def.key, v + big, min, max, isInt);
     }
@@ -2837,9 +2850,9 @@ function drawEnum(def) {
     var last = def.values.length - 1;
     UI.text(def.cn);
     UI.sameLine();
-    if (UI.button('◀##el_' + def.key)) setSetting(def.key, def.values[(curIdx + last) % def.values.length], true, true);
+    if (UI.button('<##el_' + def.key)) setSetting(def.key, def.values[(curIdx + last) % def.values.length], true, true);
     UI.sameLine();
-    if (UI.button('▶##er_' + def.key)) setSetting(def.key, def.values[(curIdx + 1) % def.values.length], true, true);
+    if (UI.button('>##er_' + def.key)) setSetting(def.key, def.values[(curIdx + 1) % def.values.length], true, true);
     UI.sameLine();
     UI.text('= ' + (def.labels && def.labels[curIdx] !== undefined ? def.labels[curIdx] : CONFIG[def.key]));
     if (!av) return;
@@ -2923,7 +2936,7 @@ function drawPanel() {
                 var coreN = 0;
                 for (var ci2 = 0; ci2 < SETTING_DEFS.length; ci2++) if (SETTING_DEFS[ci2].core) coreN++;
                 UI.text('现在只显示常用 ' + coreN + ' 项，还有 ' + (SETTING_DEFS.length - coreN) +
-                    ' 项没显示（每项都能用 − + 按钮调）');
+                    ' 项没显示（每项都能调）');
             }
             if (CONFIG.panelCompact && UI.button('显示全部设置##btn_expand')) {
                 setSetting('panelCompact', false);   // 紧凑模式下的逃生口
@@ -2950,6 +2963,18 @@ function drawPanel() {
                     else drawNumber(def);
                 }
             }
+
+            UI.separator();
+            UI.separator();
+            if (UI.button(S.quitArmed ? '再点一次确认退出脚本##btn_quit' : '一键退出脚本##btn_quit')) {
+                if (S.quitArmed) {
+                    unloadScript();
+                    return;                      // 面板这就没了
+                }
+                S.quitArmed = true;
+                notice('再点一次最下面那个按钮就退出脚本', true);
+            }
+            UI.text('一键退出 = 强度归零 + 断开中继 + 还原游戏事件，之后脚本不再有任何动作');
 
             UI.separator();
             if (UI.button('立即归零##btn_zero')) {
@@ -3092,6 +3117,7 @@ function callPrevHandler(name, args) {
 }
 
 var onTickEvent = function () {
+    if (S.unloaded) return;
     callPrevHandler('onTickEvent', arguments);
     try {
         dglabTick();
@@ -3101,6 +3127,7 @@ var onTickEvent = function () {
 };
 
 var onEntityBehaviorEvent = function (id, behavior, value) {
+    if (S.unloaded) return;
     callPrevHandler('onEntityBehaviorEvent', arguments);
     try {
         dglabHurt(id, behavior, value);
@@ -3110,6 +3137,7 @@ var onEntityBehaviorEvent = function (id, behavior, value) {
 };
 
 var onReadyEvent = function () {
+    if (S.unloaded) return;
     callPrevHandler('onReadyEvent', arguments);
     try {
         dglabReady();
@@ -3119,6 +3147,7 @@ var onReadyEvent = function () {
 };
 
 var onLeaveGameEvent = function () {
+    if (S.unloaded) return;
     callPrevHandler('onLeaveGameEvent', arguments);
     try {
         dglabLeave();
@@ -3129,6 +3158,7 @@ var onLeaveGameEvent = function () {
 
 /* 聊天指令：自己先处理 !dg，处理了才拦截；否则交还给旧的处理函数 */
 var onSendChatMessageEvent = function (message) {
+    if (S.unloaded) return false;
     try {
         if (dglabChat(message)) return true;
     } catch (e) {
@@ -3138,6 +3168,7 @@ var onSendChatMessageEvent = function (message) {
 };
 
 var onImGuiRenderEvent = function () {
+    if (S.unloaded) return;
     callPrevHandler('onImGuiRenderEvent', arguments);
     try {
         dglabImgui();
@@ -3193,6 +3224,34 @@ function findGlobal() {
     return null;
 }
 
+/* 一键退出：强度归零、断开中继、把全局事件还原，之后所有回调直接返回 */
+function unloadScript() {
+    if (S.unloaded) return;
+    S.unloaded = true;
+    try {
+        resetOutput('退出脚本', 0);
+        DG.flushStrength(nowMs(), true);
+        DG.flushClear(nowMs(), true);
+    } catch (e) { /* 忽略 */ }
+    CONFIG.enabled = false;
+    CONFIG.autoReconnect = false;
+    try { DG.close(true); } catch (e2) { /* 忽略 */ }
+    try {
+        if (GLOBAL) {
+            for (var qn in OUR_HANDLERS) {
+                if (!OUR_HANDLERS.hasOwnProperty(qn)) continue;
+                var prev = PREV_HANDLERS[qn];
+                if (typeof prev === 'function') GLOBAL[qn] = prev;      // 原来有同名函数就还回去
+                else { try { delete GLOBAL[qn]; } catch (e3) { GLOBAL[qn] = undefined; } }
+            }
+        }
+    } catch (e4) { /* 忽略 */ }
+    logAlways('脚本已退出（unloadScript）');
+    try {
+        chat('[DG-LAB] 脚本已退出：强度已归零、中继已断开、事件已还原。想再用就重进世界或重新加载脚本');
+    } catch (e5) { /* 忽略 */ }
+}
+
 var OUR_HANDLERS = {
     onTickEvent: onTickEvent,
     onEntityBehaviorEvent: onEntityBehaviorEvent,
@@ -3209,7 +3268,7 @@ if (GLOBAL) {
     }
 } else {
     logAlways('找不到全局对象，事件函数挂不上');
-    try { chat('[DG-LAB] ⚠️ 挂不上游戏事件函数（这个引擎没有全局对象），脚本不会生效'); } catch (e) { /* 忽略 */ }
+    try { chat('[DG-LAB] !! 挂不上游戏事件函数（这个引擎没有全局对象），脚本不会生效'); } catch (e) { /* 忽略 */ }
 }
 
 /* 有的加载器会在本脚本之后把全局事件函数换掉，那样本脚本就再也不跑了
