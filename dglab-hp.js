@@ -718,7 +718,29 @@ function loadConfig() {
             reportError('读取设置（' + def.key + '）', e);
         }
     }
+    fixPanelSetting();
     log('设置已读取', JSON.stringify(CONFIG));
+}
+
+/* 一次性修复：旧版本可能因为引擎乱写面板可见性，把「显示设置面板=false」存进了存档，
+ * 之后面板再也不显示。升级后强制打开一次，之后用户怎么设都尊重。 */
+function fixPanelSetting() {
+    if (!spAvailable()) return;
+    var key = SP_PREFIX + 'panelFix2';
+    var saved = false;
+    try { saved = MOD.sp.contains(SP_PREFIX + 'showPanel'); } catch (e) { saved = false; }
+    if (!saved) return;          // 存档里还没存过这个设置，没什么可修
+    var done = false;
+    try { done = MOD.sp.getBoolean(key); } catch (e2) { done = false; }
+    if (done) return;
+    try {
+        if (CONFIG.showPanel === false) {
+            CONFIG.showPanel = true;
+            try { MOD.sp.putBoolean(SP_PREFIX + 'showPanel', true); } catch (e3) { /* 写不进去就算了 */ }
+            chat('[DG-LAB] 面板之前被旧版本的 bug 关掉了，已经帮你重新打开（不想看就在面板里关）');
+        }
+        MOD.sp.putBoolean(key, true);
+    } catch (e2) { /* 存档读不了就算了 */ }
 }
 
 function saveConfig() {
@@ -2242,7 +2264,15 @@ function setSetting(key, raw, save, quiet) {
     if (key === 'randomWaveform' && !v) S.waveOverride = '';
     if (key === 'waveRotateMode' && v === 'off') S.waveNow = '';
     if (key === 'waveRotateIntervalSec' || key === 'waveRotateMode') S.waveNextAt = 0;
-    if (save) saveConfig();
+    if (save) {
+        if (key === 'showPanel') {
+            /* 标记：这个值是本版本有意存的，别再当成老 bug 的残留去"修" */
+            try {
+                if (spAvailable()) MOD.sp.putBoolean(SP_PREFIX + 'panelFix2', true);
+            } catch (e) { /* 忽略 */ }
+        }
+        saveConfig();
+    }
     if (!quiet) chat('[DG-LAB] ' + def.cn + ' = ' + v);
     log('设置', key, '=', v);
     return true;
