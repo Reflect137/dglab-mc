@@ -853,6 +853,7 @@ var S = {
     powerHinted: false,   // 本次世界是否已提示过「总开关/屏蔽输出」
     deviceZeroSince: 0,   // 设备回报强度一直是 0 的起始时间
     deviceZeroHinted: false,
+    creativeSince: 0,     // 连续处于创造/旁观的起始时间
     unloaded: false,      // 已一键退出（所有回调空转）
     quitArmed: false,     // 面板上"退出"按钮已点过一次
     offlineStop: false,   // 连不上太久，已自动停止输出
@@ -1958,6 +1959,7 @@ function engineTick(t, dtMs) {
     /* 最低输出电量：低于它就彻底停（防止 1 点残电一直放） */
     if (CONFIG.minOutputEnergy > 0 && !(S.decayUntil > t) && S.energy < CONFIG.minOutputEnergy && S.energy > 0) {
         markZero('低于最低输出电量', t);
+        log('电量 ' + round1(S.energy) + ' 低于最低输出 ' + CONFIG.minOutputEnergy + '，停手');
         S.energy = 0;
         S.chargeUntil = 0;
         S.waveOverride = '';
@@ -2136,9 +2138,13 @@ function pollVitals(t) {
         S.lastHp = v.hp;
         S.lastTotal = v.total;
         S.lastAbsorb = v.absorb;
-        if (S.energy > 0) resetOutput('创造/旁观');
+        /* 有的环境会"闪一下"创造/旁观（切菜单、上载具、服务端同步瞬间），
+         * 只闪一帧就把电清光太坑了：连续 1 秒才算数 */
+        if (!S.creativeSince) S.creativeSince = t;
+        if (S.energy > 0 && t - S.creativeSince >= 1000) resetOutput('创造/旁观');
         return;
     }
+    S.creativeSince = 0;
 
     if (S.lastTotal === null || S.lastHp === null) {
         S.lastHp = v.hp;
@@ -2632,6 +2638,11 @@ function handleCommand(msg) {
         chat('  清电记录 ' + (zc.length ? zc.join(' ｜ ') : '无') +
             (S.zeroLastWhy ? '（最近一次：' + S.zeroLastWhy + '，' +
                 Math.round((nowMs() - S.zeroLastAt) / 1000) + ' 秒前）' : ''));
+        chat('  会清电的设置 最低输出=' + round1(CONFIG.minOutputEnergy) +
+            ' ｜ 自然回落=' + round1(CONFIG.decayPerSec) + '/秒（保持 ' + round1(CONFIG.holdSec) + ' 秒后）' +
+            ' ｜ 满血自动清=' + (CONFIG.clearWhenFullHp ? '开' : '关') +
+            ' ｜ 创造旁观不触发=' + (CONFIG.ignoreCreative ? '开' : '关') +
+            ' ｜ 死亡处理=' + CONFIG.deathMode);
         chat('  忽略的加电 伤害太小' + S.skip.min + ' ｜ 归零静默' + S.skip.zeroHold +
             ' ｜ 复活保护' + S.skip.grace + ' ｜ 低于停止线' + S.skip.lowHp + ' ｜ 暂停关闭' + S.skip.paused);
         var decayLeft = S.decayUntil > nowMs() ? round1((S.decayUntil - nowMs()) / 1000) + ' 秒' : '无';
