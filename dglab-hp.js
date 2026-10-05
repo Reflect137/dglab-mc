@@ -880,6 +880,7 @@ var S = {
     hpReadAt: 0,          // 最近一次读到血量的时间
     unloaded: false,      // 已一键退出（所有回调空转）
     quitArmed: false,     // 面板上"退出"按钮已点过一次
+    quitPending: false,   // 等这一帧面板收尾后再退出
     offlineStop: false,   // 连不上太久，已自动停止输出
     waveHits: 0,          // 距离上次轮换累计的受伤次数
     waveSwitchAt: 0,      // 延迟轮换的到点时间（0 = 没有待切换）
@@ -3204,11 +3205,14 @@ function drawPanel() {
             UI.separator();
             if (UI.button(S.quitArmed ? '再点一次确认退出脚本##btn_quit' : '一键退出脚本##btn_quit')) {
                 if (S.quitArmed) {
-                    unloadScript();
-                    return;                      // 面板这就没了
+                    /* 不能在这里直接退出：ImGui 的 Begin 必须配上 End，
+                     * 中途 return 会让面板的 Begin/End 不配对，引擎过一会儿就崩。
+                     * 所以先记下来，等这一帧正常收尾之后再退。 */
+                    S.quitPending = true;
+                } else {
+                    S.quitArmed = true;
+                    notice('再点一次最下面那个按钮就退出脚本', true);
                 }
-                S.quitArmed = true;
-                notice('再点一次最下面那个按钮就退出脚本', true);
             }
             UI.separator();
             if (UI.button('立即归零##btn_zero')) {
@@ -3298,6 +3302,10 @@ function dglabImgui() {
         drawPanel();
     } catch (e) {
         reportError('画面板（外层）', e);
+    }
+    if (S.quitPending) {
+        S.quitPending = false;
+        try { unloadScript(); } catch (e) { reportError('退出脚本（unloadScript）', e); }
     }
     try {
         drawHud();
@@ -3475,8 +3483,10 @@ function unloadScript() {
             for (var qn in OUR_HANDLERS) {
                 if (!OUR_HANDLERS.hasOwnProperty(qn)) continue;
                 var prev = PREV_HANDLERS[qn];
-                if (typeof prev === 'function') GLOBAL[qn] = prev;      // 原来有同名函数就还回去
-                else { try { delete GLOBAL[qn]; } catch (e3) { GLOBAL[qn] = undefined; } }
+                /* 原来有同名函数就还回去；没有就留一个空函数。
+                 * 千万别 delete / 设成 undefined —— 游戏每帧都会按名字调这些函数，
+                 * 调到一个不是函数的东西会直接把游戏搞崩。 */
+                GLOBAL[qn] = (typeof prev === 'function') ? prev : function () { };
             }
         }
     } catch (e4) { /* 忽略 */ }
