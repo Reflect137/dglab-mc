@@ -3187,8 +3187,6 @@ function drawPanel() {
                 S.quitArmed = true;
                 notice('再点一次最下面那个按钮就退出脚本', true);
             }
-            UI.text('一键退出 = 强度归零 + 断开中继 + 还原游戏事件，之后脚本不再有任何动作');
-
             UI.separator();
             if (UI.button('立即归零##btn_zero')) {
                 resetOutput('面板归零', CONFIG.manualZeroHoldMs);
