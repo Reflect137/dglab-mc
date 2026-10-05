@@ -1,18 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 
-/*
- * dglab-relay.js —— DG-LAB WebSocket V3 中继（纯 Node.js，零依赖）
- *
- * 用法：
- *   node dglab-relay.js [--port 9999] [--host 0.0.0.0] [--verbose] [--quiet] [--log relay.jsonl]
- *   GET / 与 /__status 返回状态 JSON；控制端可用 ?cid=<id> 固定 clientId。
- *
- * 协议行为对齐参考实现 dglab-websocket-server 的 v3-server.ts，
- * 自己实现了最小 RFC6455 服务端（掩码、长度分支、文本帧、ping/pong/close、分片拼接）。
- *
- * 模块接口：const { createRelay } = require('./dglab-relay.js')
- */
+/* dglab-relay.js —— DG-LAB WebSocket V3 中继（纯 Node，零依赖）
+ * 用法：node dglab-relay.js [--port 9999] [--host 0.0.0.0] [--verbose] [--quiet] [--log 文件]
+ * GET / 和 /__status 返回状态 JSON；控制端可用 ?cid=<id> 固定 clientId。
+ * 协议对齐上游 v3-server.ts，自己写了最小 RFC6455 服务端。
+ * 模块接口：const { createRelay } = require('./dglab-relay.js') */
 
 const http = require('node:http');
 const crypto = require('node:crypto');
@@ -20,7 +13,7 @@ const fs = require('node:fs');
 const { EventEmitter } = require('node:events');
 const nodePath = require('node:path');
 
-/** 版本号取自 package.json（拿不到就返回 ?） */
+/* 版本号取自 package.json */
 function readVersion() {
     try {
         const pkg = JSON.parse(fs.readFileSync(nodePath.join(__dirname, '..', 'package.json'), 'utf8'));
@@ -73,8 +66,7 @@ const MAX_LOG_MESSAGE = 4096;
 const MAX_EVENTS = 20000;
 
 const DEFAULT_PORT = 9999;
-/* 默认只绑本机：这个中继没有任何鉴权，控制端 id 又是公开常量，
- * 绑 0.0.0.0 等于把设备控制权交给同网络的所有人。要给别的设备连，显式 --host 0.0.0.0。 */
+/* 默认只绑本机：中继没鉴权，绑 0.0.0.0 等于同网络谁都能控制设备 */
 const DEFAULT_HOST = '127.0.0.1';
 
 // 与参考实现一致的环境变量默认值
@@ -739,7 +731,7 @@ class Relay extends EventEmitter {
 
         if (!this.quiet) {
             if (this.verbose) {
-                /* 排查模式：把所有地址都打出来 */
+                /* --verbose：把地址全打出来 */
                 console.log(`[relay] listening ws://${this.host}:${this.port}`);
                 console.log(`[relay] 手机内直连地址        : ws://127.0.0.1:${this.port}`);
                 console.log(`[relay] 控制端(游戏脚本)连接 : ws://127.0.0.1:${this.port}/?cid=mc-coyote`);

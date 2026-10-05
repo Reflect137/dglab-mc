@@ -1,13 +1,7 @@
-/**
- * dglab-hp.js —— 《我的世界》× DG-LAB
- *
- * 放在游戏的脚本目录里（跟别的 JS 脚本一起），进世界后会自动连中继。
- * 每个游戏刻读一次血量：掉血加电、回血减电、死亡拉满，设置全在游戏内的 DG-LAB 面板上。
- *
- * 依赖 JS ModAPI：require("socket"|"player"|"sp"|"minecraft"|"ImGui")，
- * 事件用全局函数 onTickEvent / onReadyEvent / onEntityBehaviorEvent 等。
- * 内置波形数据来自 dglab-kit（GPL-3.0）。
- */
+/* dglab-hp.js —— 《我的世界》× DG-LAB
+ * 放进游戏脚本目录，进世界自动连中继。每刻读血量：掉血加电、回血减电、死亡拉满。
+ * 用 JS ModAPI：socket / player / sp / minecraft / ImGui，事件是全局函数。
+ * 波形数据来自 dglab-kit（GPL-3.0）。 */
 
 'use strict';
 
@@ -89,15 +83,13 @@ function chat(msg) {
     console.log(m);
 }
 
-/* ========================================================================== *
- *  错误上报：任何一处出错都直接在游戏里说出来（clientMessage），并在面板上留痕
- * ========================================================================== */
+/* 错误上报：出错就直接弹给玩家看 */
 
 var ERR_LAST_AT = {};   // 出错位置 -> 上次上报时间（同一处 3 秒内只说一次，防刷屏）
 var ERR_LIST = [];      // 最近 20 条，!dg errors 可以看
 var ERR_COUNT = 0;      // 出错总次数
 
-/** 把异常整理成一条能直接看懂的消息 */
+/* 异常整理成一条消息 */
 function errText(where, e, extra) {
     var msg = (e && e.message) ? e.message : String(e);
     var stack = '';
@@ -113,7 +105,7 @@ function errText(where, e, extra) {
     return '[DG-LAB] ' + out;
 }
 
-/** 统一入口：记下来 + 直接弹给玩家 */
+/* 记一笔 + 弹给玩家 */
 function reportError(where, e, extra) {
     var now = 0;
     try { now = nowMs(); } catch (e2) { now = 0; }
@@ -131,7 +123,7 @@ function reportError(where, e, extra) {
     try { log('错误上报', where, e); } catch (e4) { /* 忽略 */ }
 }
 
-/** 包一层：出错就上报，不让异常把这一帧弄没 */
+/* 包一层，出错就上报 */
 function guard(where, fn) {
     return function () {
         try {
@@ -143,8 +135,7 @@ function guard(where, fn) {
     };
 }
 
-/* 关键事件提示（走 clientMessage 的本地消息）
- * force=true 时忽略「提示最小间隔」（配对、归零这类一次性消息用） */
+/* 提示消息：force=true 时忽略最小间隔（配对、归零这种一次性消息用） */
 function notice(msg, force) {
     if (!CONFIG.clientNotify) return;
     var gap = Number(CONFIG.notifyMinIntervalMs) || 0;
@@ -450,7 +441,7 @@ var DEFAULT_CONFIG = {
     startDelaySec: 0,
     stopBelowHp: 0,
     respawnGraceSec: 0,
-    respawnDecaySec: 0,               // 复活后电量在这么多秒内回落到 0（0 = 关闭）
+    respawnDecaySec: 0,               // 复活后几秒内回落到 0（0 = 关）
     instantFall: true,
     maxRisePerSecond: 20,
     maxFallPerSecond: 30,
@@ -531,7 +522,7 @@ var DEFAULT_CONFIG = {
 
 var CONFIG = {};
 
-/* 设置项元数据（面板、指令、持久化共用） */
+/* 设置项元数据：面板、指令、存档共用 */
 var SETTING_GROUPS = ['连接', '通道', '加电曲线', '增益', '回血回落', '死亡', '波形', '安全', '界面'];
 
 var SETTING_DEFS = [
@@ -793,9 +784,9 @@ var S = {
     pendingAt: 0,         // 上面这批电量什么时候生效
     pendingBurstSec: 0,   // 上面这批电量对应的波形时长
     respawnGraceUntil: 0, // 复活保护到什么时候
-    decayFrom: 0,         // 复活回落：起始电量
-    decayStart: 0,        // 复活回落：什么时候开始
-    decayUntil: 0,        // 复活回落：什么时候结束（0 = 没有在回落）
+    decayFrom: 0,         // 回落起始电量
+    decayStart: 0,        // 回落开始时间
+    decayUntil: 0,        // 回落结束时间（0 = 没在回落）
     minuteStartedAt: 0,   // 每分钟加电上限的窗口起点
     minuteEnergy: 0,      // 本分钟已加的电量
     lastNoticeAt: 0,      // 上一条提示的时间
@@ -929,8 +920,7 @@ var DG = {
         this.sentStrength = -1;
         this.pendingStrength = null;
         try {
-            /* 回调都要认领自己的 socket：重复「连接」时旧 socket 的关闭事件
-               会把新连接打掉（onClosed 里会清 this.ws），之后所有下发静默失败 */
+            /* 回调先认自己的 socket：否则旧的关闭事件会把新连接打掉 */
             ws.setOnOpenListener(function () {
                 if (self.ws !== ws) return;
                 try {
@@ -1018,7 +1008,7 @@ var DG = {
         this.pendingStrength = Math.round(v);
     },
 
-    /* 通道/倍率/偏移变了：让当前强度重新下发一次 */
+    /* 通道/倍率/偏移变了，重发一次当前强度 */
     invalidateStrength: function () {
         this.sentStrength = -1;
         this.pendingStrength = null;
@@ -1546,14 +1536,14 @@ function onDamage(dmg, t) {
 
     add = applyRateCaps(add, t);
 
-    /* 复活回落期间又挨打了：回落让位，新的伤害照常加电 */
+    /* 回落中又挨打：让位给新伤害 */
     if (S.decayUntil) {
         S.decayUntil = 0;
         S.decayFrom = 0;
         log('复活回落中断：又挨打了');
     }
 
-    /* 波形轮换：攒够次数就换（可以延迟一点再换） */
+    /* 攒够次数就换波形 */
     if (CONFIG.waveRotateMode !== 'off' && CONFIG.waveRotateOnHit) {
         S.waveHits++;
         var everyN = Math.max(1, Math.round(CONFIG.waveRotateEveryN));
@@ -1634,7 +1624,7 @@ function onHeal(amount, t) {
     log('回血', round1(amount), '模式', CONFIG.healMode, '剩余电量', round1(S.energy));
 }
 
-/* 屏幕提示内容：只显示当前用到的通道（单通道就只显示那一个，双通道就都显示） */
+/* 提示内容：用哪个通道就显示哪个 */
 function tipText() {
     var parts = [];
     var mode = CONFIG.tipContent;
@@ -1656,7 +1646,7 @@ function tipText() {
     return 'DG-LAB｜' + parts.join('　');
 }
 
-/* 每刻检查：到间隔就刷一次屏幕提示（暂停/未连接也有提示，方便排查） */
+/* 到间隔就刷一次屏幕提示 */
 function tickTip(t) {
     if (!CONFIG.tipEnabled) {
         S.tipShown = '';
@@ -1680,7 +1670,7 @@ function tickTip(t) {
     }
 }
 
-/* 波形轮换：顺序取下一个，或随机取一个不同的 */
+/* 轮换：顺序取下一个，或随机取一个不同的 */
 function rotateWave(t) {
     var mode = CONFIG.waveRotateMode;
     if ((mode !== 'sequence' && mode !== 'random') || WAVE_IDS.length < 2) return false;
@@ -1704,7 +1694,7 @@ function rotateWave(t) {
     return true;
 }
 
-/* 每刻检查：定时轮换 + 受伤后的延迟轮换 */
+/* 定时轮换 + 受伤后的延迟轮换 */
 function tickWaveRotate(t) {
     var mode = CONFIG.waveRotateMode;
     if (mode !== 'sequence' && mode !== 'random') {
@@ -1831,7 +1821,7 @@ function engineTick(t, dtMs) {
         if (floorE > 0 && S.energy < floorE) S.energy = floorE;
     }
 
-    /* 复活后慢慢回落：放在所有「清电/保底」逻辑之后，这样它说了算 */
+    /* 回落放在清电/保底之后，让它说了算 */
     if (S.decayUntil > t) {
         var span = S.decayUntil - S.decayStart;
         var k = span > 0 ? clamp((t - S.decayStart) / span, 0, 1) : 1;
@@ -1953,7 +1943,7 @@ function pollVitals(t) {
                 S.respawnGraceUntil = t + Math.round(CONFIG.respawnGraceSec * 1000);
                 log('复活保护 ' + CONFIG.respawnGraceSec + ' 秒');
             }
-            /* 复活后电量慢慢回落：不是瞬间清零，而是从死亡时的电量线性降下来 */
+            /* 复活后电量从死亡时的值慢慢降到 0 */
             if (CONFIG.respawnDecaySec > 0 && S.energy > 0.01) {
                 S.decayFrom = S.energy;
                 S.decayStart = t;
@@ -2104,7 +2094,7 @@ function dglabReady() {
     S.lastTotal = null;
     logAlways('已进入世界');
 
-    /* 加载结果直接说出来：缺了哪个模块、出错几次，一眼就能看到 */
+    /* 把加载结果和缺的模块直接说出来 */
     var miss = [];
     if (!MOD.socket || !MOD.socket.WebSocket) miss.push('socket（连不上中继）');
     if (!MOD.player) miss.push('player（读不到血量）');
@@ -2377,7 +2367,7 @@ function handleCommand(msg) {
 }
 
 function dglabChat(message) {
-    /* 面板被关掉时，指令自动生效：否则玩家在游戏里再没有任何入口能把它打开 */
+    /* 面板关了就让指令生效，否则没法把面板打开 */
     if (!CONFIG.interceptChat && CONFIG.showPanel) return false;
     if (!CONFIG.interceptChat && !CONFIG.showPanel) log('面板已关闭，聊天指令自动生效（!dg panel 可以打开面板）');
     if (typeof message !== 'string') return false;
@@ -2789,12 +2779,9 @@ try {
     /* 忽略 */
 }
 
-/* ========================================================================== *
- *  15. 游戏事件入口（可与别的脚本共存）
- *
- *  用 var 赋值而不是 function 声明：函数声明会被提升，导致读不到「别的脚本
- *  先注册的同名全局函数」。这里先记下旧的，再装自己的，之后链式调用两边都跑。
- * ========================================================================== */
+/* ---- 15. 游戏事件入口（和别的脚本共存） ----
+ * 用 var 不用 function 声明：声明会提升，读不到别的脚本先注册的同名函数。
+ * 先记下旧的，再装自己的，之后链式调用两边都跑。 */
 
 var PREV_HANDLERS = {};
 
@@ -2901,15 +2888,14 @@ var API = {
     readVitals: readVitals,
 };
 
-/* 只有测试脚手架会用到（游戏里没有 module，这一行什么也不做） */
+/* 只给测试用；游戏里没有 module */
 try {
     if (typeof module !== 'undefined' && module && module.exports) module.exports = API;
 } catch (e) {
     /* 游戏里没有 module，忽略 */
 }
 
-/* 把事件函数挂到全局（游戏引擎按全局名调用）。
- * 已经存在的同名函数在文件开头被抓进 PREV_HANDLERS，两边都会被调到。 */
+/* 事件函数挂到全局（游戏按全局名调用）；同名旧函数已在开头抓进 PREV_HANDLERS */
 var OUR_HANDLERS = {
     onTickEvent: onTickEvent,
     onEntityBehaviorEvent: onEntityBehaviorEvent,
@@ -2928,9 +2914,8 @@ try {
     logAlways('挂载全局事件失败: ' + e);
 }
 
-/* 有些加载器 / 别的脚本会在本脚本之后把全局事件函数整个换掉，那样本脚本就再也不跑了
- *（表现就是「加载完什么都没发生」）。这里定期检查：被换掉就抢回来，
- *  同时把对方的实现接进调用链，两边的代码都还能跑到。 */
+/* 有的加载器会在本脚本之后把全局事件函数换掉，那样本脚本就再也不跑了
+ *（症状：加载完啥都没发生）。定期检查，被换掉就抢回来，对方的实现接进调用链。 */
 function keepHooked(where) {
     var G = (typeof globalThis !== 'undefined') ? globalThis : null;
     if (!G) return;
