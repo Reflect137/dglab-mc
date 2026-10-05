@@ -396,6 +396,7 @@ var DEFAULT_CONFIG = {
     startDelaySec: 0,
     stopBelowHp: 0,
     respawnGraceSec: 0,
+    respawnDecaySec: 0,               // 复活后电量在这么多秒内回落到 0（0 = 关闭）
     instantFall: true,
     maxRisePerSecond: 20,
     maxFallPerSecond: 30,
@@ -464,6 +465,10 @@ var DEFAULT_CONFIG = {
     notifyMinIntervalMs: 0,
     panelCompact: false,
     hudEnabled: false,
+    tipEnabled: false,                // 用 showTipMessage 在屏幕上显示各通道数值
+    tipIntervalMs: 1000,              // 刷新间隔（毫秒）
+    tipContent: 'channel',            // channel = 各通道强度，both = 总电量+各通道，energy = 只看总电量
+    tipSource: 'plan',                // plan = 脚本下发的值，device = 设备回传的值
     hudX: 20,
     hudY: 20,
     interceptChat: false,
@@ -502,6 +507,7 @@ var SETTING_DEFS = [
     { key: 'startDelaySec', cn: '受伤后延迟加电', group: '加电曲线', type: 'float', min: 0, max: 5, step: 0.5 },
     { key: 'stopBelowHp', cn: '低于血量就停', group: '加电曲线', type: 'float', min: 0, max: 20, step: 0.5 },
     { key: 'respawnGraceSec', cn: '复活保护时间', group: '加电曲线', type: 'float', min: 0, max: 30, step: 1 },
+    { key: 'respawnDecaySec', cn: '复活后回落秒数', group: '死亡', type: 'float', min: 0, max: 60, step: 1 },
     { key: 'instantFall', cn: '回血瞬间回落', group: '加电曲线', type: 'bool' },
     { key: 'maxRisePerSecond', cn: '每秒最大涨幅', group: '加电曲线', type: 'float', min: 0.5, max: 200, step: 0.5 },
     { key: 'maxFallPerSecond', cn: '每秒最大回落', group: '加电曲线', type: 'float', min: 0.5, max: 200, step: 0.5 },
@@ -562,11 +568,15 @@ var SETTING_DEFS = [
     { key: 'notifyHurt', cn: '每次掉血提示', group: '界面', type: 'bool' },
     { key: 'notifyDeviceChange', cn: '设备强度变动提示', group: '界面', type: 'bool' },
     { key: 'notifyMinIntervalMs', cn: '提示最小间隔', group: '界面', type: 'int', min: 0, max: 60000 },
-    { key: 'panelCompact', cn: '面板只显示常用', group: '界面', type: 'bool' },
-    { key: 'hudEnabled', cn: '屏幕状态条', group: '界面', type: 'bool' },
+    { key: 'panelCompact', cn: '面板只显示常用', group: '界面', type: 'bool', core: true },
+    { key: 'hudEnabled', cn: '屏幕状态条', group: '界面', type: 'bool', core: true },
+    { key: 'tipEnabled', cn: '屏幕提示电量', group: '界面', type: 'bool', core: true },
+    { key: 'tipIntervalMs', cn: '提示刷新间隔', group: '界面', type: 'int', min: 200, max: 10000 },
+    { key: 'tipContent', cn: '提示显示内容', group: '界面', type: 'enum', values: ['channel', 'both', 'energy'], labels: ['各通道强度', '总电量+各通道', '只看总电量'] },
+    { key: 'tipSource', cn: '提示取哪个值', group: '界面', type: 'enum', values: ['plan', 'device'], labels: ['脚本下发值', '设备回传值'] },
     { key: 'hudX', cn: '状态条横向位置', group: '界面', type: 'int', min: 0, max: 2000 },
     { key: 'hudY', cn: '状态条纵向位置', group: '界面', type: 'int', min: 0, max: 2000 },
-    { key: 'interceptChat', cn: '接管聊天指令', group: '界面', type: 'bool' },
+    { key: 'interceptChat', cn: '接管聊天指令', group: '界面', type: 'bool', core: true },
     { key: 'debug', cn: '调试日志', group: '界面', type: 'bool' },
 ];
 
@@ -723,10 +733,15 @@ var S = {
     zeroHoldUntil: 0,     // 手动归零后的静默期
     lastAddAmount: 0,     // 上次加了多少电
     lastAddAt: 0,         // 上次加电的时间
+    lastTipAt: 0,         // 上次发屏幕提示的时间
+    tipShown: '',         // 上次提示的内容
     pendingAdd: 0,        // 「受伤后延迟加电」攒着的电量
     pendingAt: 0,         // 上面这批电量什么时候生效
     pendingBurstSec: 0,   // 上面这批电量对应的波形时长
     respawnGraceUntil: 0, // 复活保护到什么时候
+    decayFrom: 0,         // 复活回落：起始电量
+    decayStart: 0,        // 复活回落：什么时候开始
+    decayUntil: 0,        // 复活回落：什么时候结束（0 = 没有在回落）
     minuteStartedAt: 0,   // 每分钟加电上限的窗口起点
     minuteEnergy: 0,      // 本分钟已加的电量
     lastNoticeAt: 0,      // 上一条提示的时间
@@ -1274,6 +1289,8 @@ function resetOutput(reason, holdMs) {
     S.nextPulseAt = 0;
     S.comboCount = 0;
     S.waveOverride = '';
+    S.decayUntil = 0;     // 归零/暂停/退出世界时，回落也一起停
+    S.decayFrom = 0;
     S.waveSwitchAt = 0;   // 别把上个世界/归零前排队的切换带过来
     S.waveHits = 0;
     S.waveNow = '';
@@ -1440,6 +1457,13 @@ function onDamage(dmg, t) {
 
     add = applyRateCaps(add, t);
 
+    /* 复活回落期间又挨打了：回落让位，新的伤害照常加电 */
+    if (S.decayUntil) {
+        S.decayUntil = 0;
+        S.decayFrom = 0;
+        log('复活回落中断：又挨打了');
+    }
+
     /* 波形轮换：攒够次数就换（可以延迟一点再换） */
     if (CONFIG.waveRotateMode !== 'off' && CONFIG.waveRotateOnHit) {
         S.waveHits++;
@@ -1492,7 +1516,10 @@ function onHeal(amount, t) {
     var floor = Math.min(CONFIG.hurtFloorEnergy, energyCapValue());
 
     if (CONFIG.healMode === 'full') {
-        if (full) {
+        if (full && (S.decayUntil > t || (S.deathHandled && CONFIG.respawnDecaySec > 0))) {
+            /* 复活这一下也是「回满血」，但要让回落曲线接管，不能瞬间清电 */
+            log('复活/回落中，回满血不清电');
+        } else if (full) {
             var hadEnergy = S.energy > 0;
             S.energy = 0;
             S.waveOverride = '';
@@ -1516,6 +1543,52 @@ function onHeal(amount, t) {
     }
 
     log('回血', round1(amount), '模式', CONFIG.healMode, '剩余电量', round1(S.energy));
+}
+
+/* 屏幕提示内容：只显示当前用到的通道（单通道就只显示那一个，双通道就都显示） */
+function tipText() {
+    var parts = [];
+    var mode = CONFIG.tipContent;
+    if (mode === 'energy' || mode === 'both') parts.push('电量 ' + round1(S.energy));
+    if (mode !== 'energy') {
+        var plan = channelPlan();
+        for (var i = 0; i < plan.length; i++) {
+            var letter = plan[i].letter;
+            var v;
+            if (CONFIG.tipSource === 'device') {
+                v = (letter === 'A') ? DG.device.A : DG.device.B;
+            } else {
+                v = Math.round(S.strength * plan[i].scale + plan[i].offset);
+            }
+            if (!isFinite(v) || v < 0) v = 0;
+            parts.push(letter + ' ' + Math.round(v));
+        }
+    }
+    return 'DG-LAB｜' + parts.join('　');
+}
+
+/* 每刻检查：到间隔就刷一次屏幕提示（暂停/未连接也有提示，方便排查） */
+function tickTip(t) {
+    if (!CONFIG.tipEnabled) {
+        S.tipShown = '';
+        S.lastTipAt = 0;
+        return;
+    }
+    var gap = clamp(CONFIG.tipIntervalMs, 200, 10000);
+    if (t - S.lastTipAt < gap) return;
+    S.lastTipAt = t;
+    var text;
+    if (!CONFIG.enabled) text = 'DG-LAB｜已关闭';
+    else if (S.paused) text = 'DG-LAB｜已暂停';
+    else if (DG.state !== 'paired') text = 'DG-LAB｜等待设备';
+    else text = tipText();
+    S.tipShown = text;
+    try {
+        if (MOD.minecraft && MOD.minecraft.showTipMessage) MOD.minecraft.showTipMessage(text);
+        else log('这个游戏的 ModAPI 没有 showTipMessage，屏幕提示用不了');
+    } catch (e) {
+        S.lastError = '屏幕提示失败: ' + e;
+    }
 }
 
 /* 波形轮换：顺序取下一个，或随机取一个不同的 */
@@ -1628,7 +1701,7 @@ function engineTick(t, dtMs) {
     }
 
     /* 最低输出电量：低于它就彻底停（防止 1 点残电一直放） */
-    if (CONFIG.minOutputEnergy > 0 && S.energy < CONFIG.minOutputEnergy && S.energy > 0) {
+    if (CONFIG.minOutputEnergy > 0 && !(S.decayUntil > t) && S.energy < CONFIG.minOutputEnergy && S.energy > 0) {
         S.energy = 0;
         S.chargeUntil = 0;
         S.waveOverride = '';
@@ -1642,7 +1715,7 @@ function engineTick(t, dtMs) {
     }
 
     /* 满血兜底：黄心被打掉时血量没变，等不到回血事件，这里按时间兜底清电 */
-    if (CONFIG.clearWhenFullHp && CONFIG.healReduces && S.lastHp !== null && S.lastMaxHp > 0) {
+    if (CONFIG.clearWhenFullHp && CONFIG.healReduces && !(S.decayUntil > t) && S.lastHp !== null && S.lastMaxHp > 0) {
         var isFullHp = (S.lastHp > 0.01 && S.lastHp >= S.lastMaxHp - 0.01);
         if (isFullHp) {
             if (!S.fullHpSince) S.fullHpSince = t;
@@ -1661,12 +1734,28 @@ function engineTick(t, dtMs) {
     }
 
     /* 没回满血时的电量保底（要尊重手动归零的静默期） */
-    if (CONFIG.hurtFloorEnergy > 0 && t >= S.zeroHoldUntil &&
+    if (CONFIG.hurtFloorEnergy > 0 && !(S.decayUntil > t) && t >= S.zeroHoldUntil &&
         S.lastHp !== null && S.lastMaxHp > 0 &&
         S.lastHp > 0.01 && S.lastHp < S.lastMaxHp - 0.01) {
         var floorE = Math.min(CONFIG.hurtFloorEnergy, energyCapValue());
         if (floorE < CONFIG.minOutputEnergy) floorE = 0;   // 低于最低输出就彻底停，别把电又抬回来
         if (floorE > 0 && S.energy < floorE) S.energy = floorE;
+    }
+
+    /* 复活后慢慢回落：放在所有「清电/保底」逻辑之后，这样它说了算 */
+    if (S.decayUntil > t) {
+        var span = S.decayUntil - S.decayStart;
+        var k = span > 0 ? clamp((t - S.decayStart) / span, 0, 1) : 1;
+        S.energy = clamp(S.decayFrom * (1 - k), 0, energyCapValue());
+        if (S.energy < 0.01) S.energy = 0;
+        S.lastDamageAt = t;
+    } else if (S.decayUntil) {
+        S.decayUntil = 0;
+        S.decayFrom = 0;
+        S.energy = 0;              // 收尾：确保真的归 0，不留最后一丁点
+        S.waveOverride = '';
+        S.comboCount = 0;
+        log('复活回落结束，电量已归 0');
     }
 
     /* 电量没清就一直续波形（真正「一直电」） */
@@ -1775,6 +1864,14 @@ function pollVitals(t) {
                 S.respawnGraceUntil = t + Math.round(CONFIG.respawnGraceSec * 1000);
                 log('复活保护 ' + CONFIG.respawnGraceSec + ' 秒');
             }
+            /* 复活后电量慢慢回落：不是瞬间清零，而是从死亡时的电量线性降下来 */
+            if (CONFIG.respawnDecaySec > 0 && S.energy > 0.01) {
+                S.decayFrom = S.energy;
+                S.decayStart = t;
+                S.decayUntil = t + Math.round(CONFIG.respawnDecaySec * 1000);
+                notice('复活：电量将在 ' + round1(CONFIG.respawnDecaySec) + ' 秒内回落到 0');
+                log('复活回落开始', round1(S.decayFrom), '→ 0，用时', CONFIG.respawnDecaySec, '秒');
+            }
         }
     } else if (!S.deathHandled) {
         S.deathHandled = true;
@@ -1818,6 +1915,7 @@ function dglabTick() {
     }
 
     engineTick(t, dt);
+    tickTip(t);
 }
 
 /* 受伤动画（EntityBehavior.HURT_ANIMATION = 2）：只当作“立刻查一次血量”的信号 */
@@ -2141,7 +2239,9 @@ function handleCommand(msg) {
 }
 
 function dglabChat(message) {
-    if (!CONFIG.interceptChat) return false;
+    /* 面板被关掉时，指令自动生效：否则玩家在游戏里再没有任何入口能把它打开 */
+    if (!CONFIG.interceptChat && CONFIG.showPanel) return false;
+    if (!CONFIG.interceptChat && !CONFIG.showPanel) log('面板已关闭，聊天指令自动生效（!dg panel 可以打开面板）');
     if (typeof message !== 'string') return false;
     var m = message.trim();
     if (m.indexOf('!dg') !== 0 && m.indexOf('.dg') !== 0) return false;
@@ -2417,6 +2517,9 @@ function drawPanel() {
                 (t < S.zeroHoldUntil ? '　归零静默中 ' + round1((S.zeroHoldUntil - t) / 1000) + ' 秒' : ''));
             UI.text('状态：' + (CONFIG.enabled ? (S.paused ? '已暂停' : '运行中') : '已关闭') +
                 '　通道：' + CONFIG.channel);
+            if (S.decayUntil > t) {
+                UI.text('复活回落中：还剩 ' + round1((S.decayUntil - t) / 1000) + ' 秒（电量 ' + round1(S.energy) + '）');
+            }
             if (CONFIG.waveRotateMode !== 'off') {
                 var wIdx = WAVE_IDS.indexOf(S.waveNow || CONFIG.waveform);
                 UI.text('波形轮换：' + (CONFIG.waveRotateMode === 'sequence' ? '顺序' : '随机') +
@@ -2424,6 +2527,9 @@ function drawPanel() {
                     (S.waveSwitchAt > t ? '　' + round1((S.waveSwitchAt - t) / 1000) + ' 秒后换' : ''));
             }
             if (S.pairingUrl) UI.text('设备连接地址：' + S.pairingUrl);
+            if (CONFIG.panelCompact && UI.button('显示全部设置##btn_expand')) {
+                setSetting('panelCompact', false);   // 紧凑模式下的逃生口
+            }
             if (S.lastError) UI.text('最近错误：' + S.lastError);
             UI.separator();
 
