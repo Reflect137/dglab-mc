@@ -901,6 +901,7 @@ var S = {
     hpReadAt: 0,          // 最近一次读到血量的时间
     unloaded: false,      // 已一键退出（所有回调空转）
     quitArmed: false,     // 面板上"退出"按钮已点过一次
+    resetArmed: false,    // 面板上"恢复默认"按钮已点过一次
     quitPending: false,   // 等这一帧面板收尾后再退出
     configDirty: false,   // 有未保存的设置改动（改了设置不会自动存）
     offlineStop: false,   // 连不上太久，已自动停止输出
@@ -2803,10 +2804,7 @@ function handleCommand(msg) {
         return true;
     }
     if (cmd === 'reset') {
-        CONFIG = copyDefaults();
-        saveConfig();
-        resetOutput('恢复默认', CONFIG.manualZeroHoldMs);
-        chat('[DG-LAB] 已恢复默认设置');
+        resetAllSettings();
         return true;
     }
     if (cmd === 'test') {
@@ -3274,6 +3272,15 @@ function drawPanel() {
             }
             UI.sameLine();
             if (UI.button('配对信息##btn_pair')) showPairing();
+            UI.separator();
+            if (UI.button(S.resetArmed ? '再点一次确认恢复默认##btn_reset' : '一键恢复默认参数##btn_reset')) {
+                if (S.resetArmed) {
+                    resetAllSettings();          // 立刻写入存档
+                } else {
+                    S.resetArmed = true;
+                    notice('再点一次就恢复默认参数（中继地址保留，会立刻写进存档）', true);
+                }
+            }
         }
     } catch (e) {
         reportError('画面板（drawPanel）', e);
@@ -3497,6 +3504,31 @@ function findGlobal() {
     try { if (typeof global !== 'undefined' && global) { GLOBAL_REF = global; return GLOBAL_REF; } } catch (e) { /* 下一个 */ }
     try { GLOBAL_REF = Function('return this')(); return GLOBAL_REF; } catch (e) { /* 拿不到 */ }
     return null;
+}
+
+/* 一键恢复默认参数：所有设置回默认值并立刻写入存档。
+ * 中继地址和通道 ID 保留 —— 那属于"接入配置"，恢复了就连不上了。 */
+function resetAllSettings() {
+    var keepUrl = CONFIG.relayUrl;
+    var keepCid = CONFIG.controllerId;
+    CONFIG = copyDefaults();
+    if (keepUrl) CONFIG.relayUrl = keepUrl;
+    if (keepCid) CONFIG.controllerId = keepCid;
+    rebuildAV();
+    saveConfig();
+    S.configDirty = false;
+    resetOutput('恢复默认', CONFIG.manualZeroHoldMs);
+    S.quitArmed = false;
+    S.resetArmed = false;
+    chat('[DG-LAB] 已恢复默认参数（中继地址和通道 ID 保留）');
+}
+
+/* 设置回默认后，面板上的控件值也要跟着回默认，否则会显示旧值 */
+function rebuildAV() {
+    for (var k in AV) {
+        if (!AV.hasOwnProperty(k)) continue;
+        try { delete AV[k]; } catch (e) { AV[k] = undefined; }
+    }
 }
 
 /* 一键退出：强度归零、断开中继、把全局事件还原，之后所有回调直接返回 */
