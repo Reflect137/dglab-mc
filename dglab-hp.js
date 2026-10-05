@@ -123,18 +123,6 @@ function reportError(where, e, extra) {
     try { log('错误上报', where, e); } catch (e4) { /* 忽略 */ }
 }
 
-/* 包一层，出错就上报 */
-function guard(where, fn) {
-    return function () {
-        try {
-            return fn.apply(null, arguments);
-        } catch (e) {
-            reportError(where, e);
-            return undefined;
-        }
-    };
-}
-
 /* 提示消息：force=true 时忽略最小间隔（配对、归零这种一次性消息用） */
 /* 常规提示：掉血、清电、死亡、复活回落这些，默认不出声（面板「聊天栏提示」可以打开） */
 function noticeRoutine(msg) {
@@ -755,6 +743,19 @@ function fixPanelSetting() {
     } catch (e2) { /* 存档读不了就算了 */ }
 }
 
+/* 改设置先记个标记，过一小会儿再真正写 sp：拖滑条时不会每帧写 93 项 */
+function scheduleSave() {
+    S.saveDirty = true;
+    S.saveDueAt = nowMs() + 400;
+}
+
+/* 真正落盘（!dg save、面板「保存设置」、退出世界时调用） */
+function flushSave() {
+    if (!S.saveDirty) return false;
+    S.saveDirty = false;
+    return saveConfig();
+}
+
 function saveConfig() {
     if (!spAvailable()) {
         log('sp 模块不可用，设置无法保存');
@@ -841,8 +842,29 @@ var S = {
 
 /* ---- 通道相关小工具（A = 左路，B = 右路） ---- */
 
+var PLAN_CACHE = { ch: '', bScale: null, bOffset: null, bWave: null, wave: '', plan: null };
+var SETTINGS_BY_GROUP = [];      // 面板用：预先按分组分好，免得每帧重扫 93 项
+
+function buildGroupIndex() {
+    SETTINGS_BY_GROUP = [];
+    for (var g = 0; g < SETTING_GROUPS.length; g++) {
+        var name = SETTING_GROUPS[g];
+        var defs = [];
+        for (var i = 0; i < SETTING_DEFS.length; i++) {
+            if (SETTING_DEFS[i].group === name) defs.push(SETTING_DEFS[i]);
+        }
+        if (defs.length) SETTINGS_BY_GROUP.push({ name: name, defs: defs });
+    }
+}
+
 function channelPlan() {
     var ch = String(CONFIG.channel || 'A').toUpperCase();
+    var mainWave = S.waveNow || CONFIG.waveform;       // 轮换中的波形优先
+    var c = PLAN_CACHE;
+    if (c.plan && c.ch === ch && c.bScale === CONFIG.bScale && c.bOffset === CONFIG.bOffset &&
+        c.bWave === CONFIG.bWaveform && c.wave === mainWave) {
+        return c.plan;                                    // 参数没变就直接复用，不用重新拼数组
+    }
     var out = [];
     var mainWave = S.waveNow || CONFIG.waveform;       // 轮换中的波形优先
     var waveA = mainWave;
@@ -860,6 +882,8 @@ function channelPlan() {
     } else {
         out.push({ letter: 'A', scale: 1, offset: 0, wave: waveA });
     }
+    c.ch = ch; c.bScale = CONFIG.bScale; c.bOffset = CONFIG.bOffset;
+    c.bWave = CONFIG.bWaveform; c.wave = mainWave; c.plan = out;
     return out;
 }
 
@@ -1579,7 +1603,8 @@ function onDamage(dmg, t) {
     S.stats.hits++;
     S.stats.damage += dmg;
     S.lastDamage = dmg;
-    S.lastDamageAt = t;
+    /* 碎伤害不刷新保持：小于这个值的伤害不算"新的一次"，免得小刀一直续着不回电 */
+    if (dmg >= CONFIG.holdResetDamage) S.lastDamageAt = t;
 
     var info = damageMultiplier(dmg, t);
     var base = curveDamage(dmg);
@@ -2080,6 +2105,7 @@ function dglabTick() {
     }
     try {
         tickTip(t);
+        if (S.saveDirty && t >= S.saveDueAt) flushSave();
     } catch (e) {
         reportError('屏幕提示（tickTip）', e);
     }
@@ -2132,6 +2158,7 @@ function init(reason) {
         log('右路波形 ' + CONFIG.bWaveform + ' 不合法，改为跟随主波形');
         CONFIG.bWaveform = '';
     }
+    buildGroupIndex();
     S.lastTickAt = nowMs();
     logAlways('v' + SCRIPT_VER + ' 已加载（' + reason + '）：中继 ' + CONFIG.relayUrl +
         '，通道 ' + CONFIG.channel + '，波形 ' + waveformName(CONFIG.waveform));
@@ -2150,6 +2177,7 @@ function connectRelay(manual) {
 }
 
 function dglabReady() {
+    flushSave();                 /* 上一局改的设置先落盘，再读回来 */
     try {
         if (!S.inited) init('onReadyEvent');
         else {
@@ -2200,15 +2228,12 @@ function dglabLeave() {
 
 function fmtConfigList() {
     var lines = [];
-    for (var g = 0; g < SETTING_GROUPS.length; g++) {
-        var group = SETTING_GROUPS[g];
+    if (!SETTINGS_BY_GROUP.length) buildGroupIndex();
+    for (var g = 0; g < SETTINGS_BY_GROUP.length; g++) {
         var parts = [];
-        for (var i = 0; i < SETTING_DEFS.length; i++) {
-            var def = SETTING_DEFS[i];
-            if (def.group !== group) continue;
-            parts.push(def.key + '=' + CONFIG[def.key]);
-        }
-        if (parts.length) lines.push('【' + group + '】' + parts.join(' '));
+        var defs = SETTINGS_BY_GROUP[g].defs;
+        for (var i = 0; i < defs.length; i++) parts.push(defs[i].key + '=' + CONFIG[defs[i].key]);
+        if (parts.length) lines.push('【' + SETTINGS_BY_GROUP[g].name + '】' + parts.join(' '));
     }
     return lines;
 }
@@ -2305,7 +2330,8 @@ function setSetting(key, raw, save, quiet) {
                 if (spAvailable()) MOD.sp.putBoolean(SP_PREFIX + 'panelFix2', true);
             } catch (e) { /* 忽略 */ }
         }
-        saveConfig();
+        if (quiet) scheduleSave();     // 面板拖滑条：延迟存，别每帧写 93 项
+        else saveConfig();             // 指令改的：立刻存
     }
     /* 面板刚被关掉：当场说一句怎么打开，免得下次进世界找不到 */
     if (key === 'showPanel' && !v) {
@@ -2451,7 +2477,8 @@ function handleCommand(msg) {
         return true;
     }
     if (cmd === 'save') {
-        chat(saveConfig() ? '[DG-LAB] 设置已保存' : '[DG-LAB] 保存失败（sp 不可用）');
+        S.saveDirty = true;                       // 先把待存的改动一起写下去
+        chat(flushSave() ? '[DG-LAB] 设置已保存' : '[DG-LAB] 保存失败（sp 不可用）');
         return true;
     }
     if (cmd === 'load') {
@@ -2789,16 +2816,16 @@ function drawPanel() {
             else if (S.lastError) UI.text('最近错误：' + S.lastError);
             UI.separator();
 
-            for (var g = 0; g < SETTING_GROUPS.length; g++) {
-                var group = SETTING_GROUPS[g];
+            if (!SETTINGS_BY_GROUP.length) buildGroupIndex();
+            for (var g = 0; g < SETTINGS_BY_GROUP.length; g++) {
+                var groupDefs = SETTINGS_BY_GROUP[g].defs;
                 var header = false;
-                for (var i = 0; i < SETTING_DEFS.length; i++) {
-                    var def = SETTING_DEFS[i];
-                    if (def.group !== group) continue;
+                for (var i = 0; i < groupDefs.length; i++) {
+                    var def = groupDefs[i];
                     if (CONFIG.panelCompact && !def.core) continue;
                     if (!header) {
                         UI.spacing();
-                        UI.text('—— ' + group + ' ——');
+                        UI.text('—— ' + SETTINGS_BY_GROUP[g].name + ' ——');
                         header = true;
                     }
                     if (def.type === 'bool') drawBool(def);
@@ -2833,7 +2860,9 @@ function drawPanel() {
             }
             UI.sameLine();
             if (UI.button('保存设置##btn_save')) {
-                saveConfig();
+                flushSave();
+                if (!S.saveDirty) saveConfig();
+                S.saveDirty = false;
                 notice('设置已保存');
             }
             UI.sameLine();
@@ -2883,9 +2912,13 @@ function drawHud() {
 }
 
 function dglabImgui() {
-    try {
-        keepHooked('画面板');
-    } catch (e) { /* 忽略 */ }
+    /* 每 30 帧查一次就够，不用每帧 */
+    S.imguiFrames = (S.imguiFrames || 0) + 1;
+    if (S.imguiFrames % 30 === 0) {
+        try {
+            keepHooked('画面板');
+        } catch (e) { /* 忽略 */ }
+    }
     try {
         drawPanel();
     } catch (e) {
@@ -3032,12 +3065,15 @@ try {
 
 /* 事件函数挂到全局（游戏按全局名调用）；同名旧函数已在开头抓进 PREV_HANDLERS */
 /* 找全局对象：老引擎可能没有 globalThis（只有 window / self / global） */
+var GLOBAL_REF = null;
+
 function findGlobal() {
-    try { if (typeof globalThis !== 'undefined' && globalThis) return globalThis; } catch (e) { /* 下一个 */ }
-    try { if (typeof window !== 'undefined' && window) return window; } catch (e) { /* 下一个 */ }
-    try { if (typeof self !== 'undefined' && self) return self; } catch (e) { /* 下一个 */ }
-    try { if (typeof global !== 'undefined' && global) return global; } catch (e) { /* 下一个 */ }
-    try { return Function('return this')(); } catch (e) { /* 拿不到 */ }
+    if (GLOBAL_REF) return GLOBAL_REF;
+    try { if (typeof globalThis !== 'undefined' && globalThis) { GLOBAL_REF = globalThis; return GLOBAL_REF; } } catch (e) { /* 下一个 */ }
+    try { if (typeof window !== 'undefined' && window) { GLOBAL_REF = window; return GLOBAL_REF; } } catch (e) { /* 下一个 */ }
+    try { if (typeof self !== 'undefined' && self) { GLOBAL_REF = self; return GLOBAL_REF; } } catch (e) { /* 下一个 */ }
+    try { if (typeof global !== 'undefined' && global) { GLOBAL_REF = global; return GLOBAL_REF; } } catch (e) { /* 下一个 */ }
+    try { GLOBAL_REF = Function('return this')(); return GLOBAL_REF; } catch (e) { /* 拿不到 */ }
     return null;
 }
 
