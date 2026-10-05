@@ -719,6 +719,7 @@ function loadConfig() {
         }
     }
     fixPanelSetting();
+    fixDecaySetting();
     log('设置已读取', JSON.stringify(CONFIG));
 }
 
@@ -741,6 +742,24 @@ function fixPanelSetting() {
         }
         MOD.sp.putBoolean(key, true);
     } catch (e2) { /* 存档读不了就算了 */ }
+}
+
+/* 一次性：「复活后回落秒数」老默认是 0，存档里被写成 0，看起来像功能没生效 */
+function fixDecaySetting() {
+    if (!spAvailable()) return;
+    var key = SP_PREFIX + 'decayFix1';
+    var done = false;
+    try { done = MOD.sp.getBoolean(key); } catch (e) { done = false; }
+    if (done) return;
+    try {
+        if (MOD.sp.contains(SP_PREFIX + 'respawnDecaySec') && CONFIG.respawnDecaySec === 0) {
+            CONFIG.respawnDecaySec = DEFAULT_CONFIG.respawnDecaySec;
+            try { MOD.sp.putFloat(SP_PREFIX + 'respawnDecaySec', CONFIG.respawnDecaySec); } catch (e2) { /* 忽略 */ }
+            chat('[DG-LAB] 「复活后回落秒数」之前是 0（旧默认值），已改成 ' +
+                round1(CONFIG.respawnDecaySec) + ' 秒；想立刻清零就把它调回 0');
+        }
+        MOD.sp.putBoolean(key, true);
+    } catch (e3) { /* 存档读不了就算了 */ }
 }
 
 /* 改设置先记个标记，过一小会儿再真正写 sp：拖滑条时不会每帧写 93 项 */
@@ -819,6 +838,7 @@ var S = {
     zeroHoldUntil: 0,     // 手动归零后的静默期
     lastAddAmount: 0,     // 上次加了多少电
     lastAddAt: 0,         // 上次加电的时间
+    skip: { min: 0, paused: 0, zeroHold: 0, grace: 0, lowHp: 0 },   // 这次加电为什么没加上
     lastTipAt: 0,         // 上次发屏幕提示的时间
     tipShown: '',         // 上次提示的内容
     pendingAdd: 0,        // 「受伤后延迟加电」攒着的电量
@@ -1585,17 +1605,20 @@ function damageMultiplier(dmg, t) {
 
 function onDamage(dmg, t) {
     /* 暂停/关闭时绝不下发，否则会先加电再被抹掉，看起来像「归零无效」 */
-    if (!CONFIG.enabled || S.paused) return;
+    if (!CONFIG.enabled || S.paused) { S.skip.paused++; return; }
     /* 刚手动归零的静默期：这段时间内不再加电 */
     if (t < S.zeroHoldUntil) {
+        S.skip.zeroHold++;
         log('归零静默期内，忽略这次加电', round1(dmg));
         return;
     }
     if (t < S.respawnGraceUntil) {
+        S.skip.grace++;
         log('复活保护中（还剩 ' + Math.round((S.respawnGraceUntil - t) / 1000) + ' 秒），忽略这次加电');
         return;
     }
     if (isHpTooLow()) {
+        S.skip.lowHp++;
         log('血量低于停止线 ' + CONFIG.stopBelowHp + '，忽略这次加电');
         return;
     }
@@ -1661,7 +1684,7 @@ function onDamage(dmg, t) {
 }
 
 /* 只有回血才减电量：默认「回满血才清」，没回满就一直电 */
-function onHeal(amount, t) {
+function onHeal(amount, t, respawnish) {
     if (!CONFIG.healReduces) return;
     if (!CONFIG.enabled || S.paused) return;
     S.stats.heals++;
@@ -1672,7 +1695,7 @@ function onHeal(amount, t) {
     var floor = Math.min(CONFIG.hurtFloorEnergy, energyCapValue());
 
     if (CONFIG.healMode === 'full') {
-        if (full && (S.decayUntil > t || (S.deathHandled && CONFIG.respawnDecaySec > 0))) {
+        if (full && (S.decayUntil > t || (respawnish && CONFIG.respawnDecaySec > 0))) {
             /* 复活这一下也是「回满血」，但要让回落曲线接管，不能瞬间清电 */
             log('复活/回落中，回满血不清电');
         } else if (full) {
@@ -2018,33 +2041,45 @@ function pollVitals(t) {
     var dmg = S.lastTotal - v.total;
     var heal = v.total - S.lastTotal;
 
+    /* 这一帧是不是"复活/大恢复"：回满血会立刻清电，得让位给"慢慢回落"。
+     * 除了死亡标记，血量一次涨回 40% 以上也算（有的环境死亡和复活在同一帧，看不到血量=0）*/
+    var hpJump = (v.maxHp > 0 && (v.hp - S.lastHp) >= v.maxHp * 0.4);
+    var respawnish = hpJump || S.deathHandled;
+    var energyBefore = S.energy;
+
     /* 先更新血量再派发事件：onHeal 要按回血后的血量判断是否回满 */
     S.lastHp = v.hp;
     S.lastTotal = v.total;
     S.lastAbsorb = v.absorb;
 
     /* dmg > 0 不能省：最小伤害设 0 时，dmg=0 会被每刻当成受伤，波形无限续播 */
-    if (dmg > 0.0001 && dmg >= CONFIG.minDamage) {
-        onDamage(dmg, t);
+    if (dmg > 0.0001) {
+        if (dmg >= CONFIG.minDamage) onDamage(dmg, t);
+        else S.skip.min++;                  // 伤害小于「最小伤害」，按设置忽略
     } else if (heal > 0.01) {
-        onHeal(heal, t);
+        onHeal(heal, t, respawnish);
     }
 
     /* 死亡处理：默认把电量直接拉满 */
     if (v.hp > 0.01) {
-        if (S.deathHandled) {
+        if (S.deathHandled || hpJump) {
+            var wasDead = S.deathHandled;
             S.deathHandled = false;
-            if (CONFIG.respawnGraceSec > 0) {
+            if (wasDead && CONFIG.respawnGraceSec > 0) {
                 S.respawnGraceUntil = t + Math.round(CONFIG.respawnGraceSec * 1000);
                 log('复活保护 ' + CONFIG.respawnGraceSec + ' 秒');
             }
-            /* 复活后电量从死亡时的值慢慢降到 0 */
-            if (CONFIG.respawnDecaySec > 0 && S.energy > 0.01) {
-                S.decayFrom = S.energy;
-                S.decayStart = t;
-                S.decayUntil = t + Math.round(CONFIG.respawnDecaySec * 1000);
-                noticeRoutine('复活：电量将在 ' + round1(CONFIG.respawnDecaySec) + ' 秒内回落到 0');
-                log('复活回落开始', round1(S.decayFrom), '→ 0，用时', CONFIG.respawnDecaySec, '秒');
+            /* 复活后电量从复活前的值慢慢降到 0（回满血刚清掉的那份也要找回来） */
+            if (CONFIG.respawnDecaySec > 0) {
+                var from = Math.max(S.energy, energyBefore);
+                if (from > 0.01) {
+                    S.energy = from;
+                    S.decayFrom = from;
+                    S.decayStart = t;
+                    S.decayUntil = t + Math.round(CONFIG.respawnDecaySec * 1000);
+                    noticeRoutine('复活：电量将在 ' + round1(CONFIG.respawnDecaySec) + ' 秒内回落到 0');
+                    log('复活回落开始', round1(from), '→ 0，用时', CONFIG.respawnDecaySec, '秒');
+                }
             }
         }
     } else if (!S.deathHandled) {
@@ -2313,6 +2348,9 @@ function setSetting(key, raw, save, quiet) {
         key === 'pulseLeadMs') {
         S.nextPulseAt = 0;
     }
+    if (key === 'respawnDecaySec') {
+        try { if (spAvailable()) MOD.sp.putBoolean(SP_PREFIX + 'decayFix1', true); } catch (e) { /* 忽略 */ }
+    }
     if (key === 'waveform') {
         S.waveNow = '';              // 玩家手动选的优先，轮换状态作废
         S.waveHits = 0;
@@ -2455,6 +2493,12 @@ function handleCommand(msg) {
             ' 血量' + (S.lastHp === null ? '-' : round1(S.lastHp) + '/' + round1(S.lastMaxHp)) +
             ' 总开关' + (CONFIG.enabled ? '开' : '关') + (S.paused ? '(暂停)' : '') +
             (S.offlineStop ? '(连不上已自动停)' : ''));
+        chat('  忽略的加电 伤害太小' + S.skip.min + ' ｜ 归零静默' + S.skip.zeroHold +
+            ' ｜ 复活保护' + S.skip.grace + ' ｜ 低于停止线' + S.skip.lowHp + ' ｜ 暂停关闭' + S.skip.paused);
+        var decayLeft = S.decayUntil > nowMs() ? round1((S.decayUntil - nowMs()) / 1000) + ' 秒' : '无';
+        chat('  复活回落 设定' + round1(CONFIG.respawnDecaySec) + ' 秒 ｜ 当前' + decayLeft +
+            ' ｜ 最小伤害' + CONFIG.minDamage + ' ｜ 归零静默' + CONFIG.manualZeroHoldMs + 'ms' +
+            ' ｜ 延迟加电' + CONFIG.startDelaySec + 's ｜ 停手线' + CONFIG.stopBelowHp);
         if (ERR_LIST.length) chat('  最后错误 ' + ERR_LIST[ERR_LIST.length - 1]);
         return true;
     }
