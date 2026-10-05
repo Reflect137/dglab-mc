@@ -417,6 +417,7 @@ var DEFAULT_CONFIG = {
     controllerId: 'mc-coyote',
     autoConnect: true,
     autoReconnect: true,
+    offlineStopSec: 60,               // 连不上这么多秒就自动停（0 = 一直重试，不停）
     channel: 'A',
 
     /* 通道 */
@@ -530,6 +531,7 @@ var SETTING_DEFS = [
     { key: 'controllerId', cn: '固定配对编号', group: '连接', type: 'string' },
     { key: 'autoConnect', cn: '自动连接', group: '连接', type: 'bool' },
     { key: 'autoReconnect', cn: '断线重连', group: '连接', type: 'bool' },
+    { key: 'offlineStopSec', cn: '连不上就自动停', group: '连接', type: 'float', min: 0, max: 600, step: 10 },
 
     { key: 'channel', cn: '控制通道', group: '通道', type: 'enum', values: ['A', 'B', 'AB'], labels: ['左路 A', '右路 B', '双路 A+B'], core: true },
     { key: 'bScale', cn: '右路强度倍率', group: '通道', type: 'float', min: 0, max: 2, step: 0.05 },
@@ -770,6 +772,7 @@ var S = {
     lastPulseAt: 0,       // 上次真正发出波形的时间
     waveOverride: '',     // 随机波形时这一次用的波形
     waveNow: '',          // 轮换当前用的波形（只存在内存里，不写 sp）
+    offlineStop: false,   // 连不上太久，已自动停止输出
     waveHits: 0,          // 距离上次轮换累计的受伤次数
     waveSwitchAt: 0,      // 延迟轮换的到点时间（0 = 没有待切换）
     waveNextAt: 0,        // 定时轮换的下次时间
@@ -1235,19 +1238,27 @@ var DG = {
     },
 
     pump: function (t) {
-        /* 一直连不上就每隔一分钟提醒一次（第一次失败已经报过一次了） */
+        /* 连不上：到点就自动停，之后安静地继续重连；连上自动恢复 */
         if (this.state !== 'paired') {
             if (!this.offlineSince) this.offlineSince = t;
-            else if (t - this.offlineSince >= 60000 && t - (this.lastOfflineTip || 0) >= 60000) {
+            var offSec = Math.round((t - this.offlineSince) / 1000);
+            if (!S.offlineStop && CONFIG.offlineStopSec > 0 && offSec >= CONFIG.offlineStopSec) {
+                S.offlineStop = true;
+                resetOutput('连不上中继，已自动停');
+                chat('[DG-LAB] 连不上中继已经 ' + offSec + ' 秒，先自动停下了（中继起来后会自动继续）');
+            } else if (!S.offlineStop && offSec >= 60 && t - (this.lastOfflineTip || 0) >= 60000) {
                 this.lastOfflineTip = t;
-                var sec = Math.round((t - this.offlineSince) / 1000);
-                chat('[DG-LAB] 还没连上中继（已 ' + sec + ' 秒）' +
+                chat('[DG-LAB] 还没连上中继（已 ' + offSec + ' 秒）' +
                     (CONFIG.paused ? '｜当前是暂停状态' : '｜去 Termux 里敲 dglab 启动中继') +
                     '，连上后会自动继续');
             }
         } else if (this.offlineSince) {
             this.offlineSince = 0;
             this.lastOfflineTip = 0;
+            if (S.offlineStop) {
+                S.offlineStop = false;
+                chat('[DG-LAB] 中继已连上，自动继续');
+            }
         }
         if (this.state === 'closed' && this.reconnectAt && t >= this.reconnectAt) {
             if (CONFIG.autoReconnect && !S.paused && CONFIG.enabled) {
@@ -1744,9 +1755,9 @@ function keepPulse(t) {
 function engineTick(t, dtMs) {
     var dt = dtMs / 1000;
 
-    if (!CONFIG.enabled || S.paused) {
+    if (!CONFIG.enabled || S.paused || S.offlineStop) {
         if (S.energy > 0 || S.strength > 0 || DG.sentStrength > 0 || S.chargeUntil > 0) {
-            resetOutput(S.paused ? '已暂停' : '总开关关闭');
+            resetOutput(S.paused ? '已暂停' : (S.offlineStop ? '连不上中继，已自动停' : '总开关关闭'));
         }
         return;
     }
@@ -2235,7 +2246,7 @@ function handleCommand(msg) {
 
     if (cmd === 'help' || cmd === '?') {
         chat('[DG-LAB] 指令: !dg ui | on/off | pause/resume | stop | zero | status | pair | ' +
-            'connect | disconnect | wave <名字> | set <项> <值> | list | save | reset | test [秒] | errors 看错误');
+            'connect | disconnect | wave <名字> | set <项> <值> | list | save | reset | test [秒] | errors | diag');
         chat('[DG-LAB] 例: !dg set 每点伤害加电 2   !dg wave 心跳节奏   !dg test 3');
         return true;
     }
@@ -2320,6 +2331,28 @@ function handleCommand(msg) {
         chat('[DG-LAB] ' + k + ' = ' + CONFIG[k]);
         return true;
     }
+    if (cmd === 'diag' || cmd === '诊断') {
+        chat('[DG-LAB] 诊断 v' + SCRIPT_VER + '｜刻 ' + S.tickCount + '｜错误 ' + ERR_COUNT + ' 次');
+        var modList = [];
+        modList.push('socket' + (MOD.socket && MOD.socket.WebSocket ? '✓' : '✗'));
+        modList.push('player' + (MOD.player ? '✓' : '✗'));
+        modList.push('sp' + (MOD.sp ? '✓' : '✗'));
+        modList.push('minecraft' + (MOD.minecraft ? '✓' : '✗'));
+        modList.push('ImGui' + (MOD.ImGui ? '✓' : '✗'));
+        modList.push('world' + (MOD.world ? '✓' : '✗'));
+        chat('  模块 ' + modList.join(' '));
+        chat('  全局 ' + (findGlobal() ? '有' : '没有') + '｜面板 showPanel=' + CONFIG.showPanel +
+            ' compact=' + CONFIG.panelCompact + ' hud=' + CONFIG.hudEnabled +
+            '｜ImGui签名=' + (UI.sig.begin || 0) + ' 画不出帧=' + (S.panelFailFrames || 0) + ' UI.ok=' + UI.ok);
+        chat('  中继 ' + DG.state + '｜' + DG.url() + '｜id=' + (DG.myId || '-') + '｜app=' + (DG.appId || '-'));
+        chat('  数值 电量' + round1(S.energy) + ' 强度' + Math.round(S.strength) + ' 通道' + CONFIG.channel +
+            ' 血量' + (S.lastHp === null ? '-' : round1(S.lastHp) + '/' + round1(S.lastMaxHp)) +
+            ' 总开关' + (CONFIG.enabled ? '开' : '关') + (S.paused ? '(暂停)' : '') +
+            (S.offlineStop ? '(连不上已自动停)' : ''));
+        if (ERR_LIST.length) chat('  最后错误 ' + ERR_LIST[ERR_LIST.length - 1]);
+        return true;
+    }
+
     if (cmd === 'errors' || cmd === 'err') {
         if (!ERR_COUNT) {
             chat('[DG-LAB] 目前没有错误记录');
@@ -2418,22 +2451,25 @@ var UI = {
 
     begin: function (title, avShow) {
         var g = MOD.ImGui;
-        var variants = [
-            function () { return g.Begin(title, avShow); },
-            function () { return g.Begin(title); },
-        ];
-        var start = this.sig.begin || 0;
-        for (var i = 0; i < variants.length; i++) {
-            var idx = (start + i) % variants.length;
-            try {
-                var r = variants[idx]();
-                this.sig.begin = idx;
-                return r;
-            } catch (e) {
-                /* 换下一个签名 */
-            }
+        var idx = this.sig.begin || 0;
+        var r = false;
+        try {
+            r = (idx === 0) ? g.Begin(title, avShow) : g.Begin(title);
+        } catch (e) {
+            this.sig.begin = (idx + 1) % 2;      // 抛异常：下一帧换另一个签名
+            return false;
         }
-        return false;
+        if (r === false || r === null || r === undefined) {
+            /* 有的版本签名不对时是"返回 false"而不是报错，连着 30 帧就换一个试试 */
+            this.failCount = (this.failCount || 0) + 1;
+            if (this.failCount >= 30) {
+                this.failCount = 0;
+                this.sig.begin = (idx + 1) % 2;
+            }
+        } else {
+            this.failCount = 0;
+        }
+        return r;
     },
 
     end: function () {
@@ -2626,6 +2662,15 @@ function drawPanel() {
     var avShow = getAV('showPanel');
     if (avShow) avShow.value = true;
     var open = UI.begin(PANEL_TITLE, avShow);
+    if (open === false) {
+        S.panelFailFrames = (S.panelFailFrames || 0) + 1;
+        if (S.panelFailFrames === 120) {         // 约 2 秒都画不出来
+            reportError('面板画不出来', new Error('ImGui.Begin 一直返回 false'),
+                '聊天栏敲 !dg panel 试试；或先开「屏幕状态条」，敲 !dg diag 看详情');
+        }
+    } else {
+        S.panelFailFrames = 0;
+    }
 
     try {
         if (open !== false) {
@@ -2646,7 +2691,7 @@ function drawPanel() {
             UI.text('上次加电：' + (S.lastAddAt ? '+' + round1(S.lastAddAmount) + '（' + addAgo + ' 秒前）' : '无') +
                 (t < S.zeroHoldUntil ? '　归零静默中 ' + round1((S.zeroHoldUntil - t) / 1000) + ' 秒' : ''));
             UI.text('状态：' + (CONFIG.enabled ? (S.paused ? '已暂停' : '运行中') : '已关闭') +
-                '　通道：' + CONFIG.channel);
+                (S.offlineStop ? '（连不上中继，已自动停）' : '') + '　通道：' + CONFIG.channel);
             if (S.decayUntil > t) {
                 UI.text('复活回落中：还剩 ' + round1((S.decayUntil - t) / 1000) + ' 秒（电量 ' + round1(S.energy) + '）');
             }
@@ -2756,12 +2801,12 @@ function dglabImgui() {
     try {
         drawPanel();
     } catch (e) {
-        /* 面板永远不能影响游戏 */
+        reportError('画面板（外层）', e);
     }
     try {
         drawHud();
     } catch (e) {
-        /* 状态条同样不能影响游戏 */
+        reportError('画屏幕状态条', e);
     }
 }
 
