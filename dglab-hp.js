@@ -96,10 +96,10 @@ function errText(where, e, extra) {
     try {
         if (e && e.stack) {
             var lines = String(e.stack).split('\n');
-            stack = lines.slice(0, 3).join(' ← ');
+            stack = lines.slice(0, 3).join(' <- ');
         }
     } catch (e2) { /* 拿不到就算了 */ }
-    var out = '❌ ' + where + '：' + msg;
+    var out = '!! ' + where + '：' + msg;
     if (stack && stack.indexOf(msg) < 0) out += '　' + stack;
     if (extra) out += '　[' + extra + ']';
     return '[DG-LAB] ' + out;
@@ -508,7 +508,7 @@ var DEFAULT_CONFIG = {
     notifyMinIntervalMs: 0,
     panelCompact: false,
     hudEnabled: false,
-    tipEnabled: true,                 // 用 showTipMessage 在屏幕上显示各通道数值
+    tipEnabled: false,                // 用 showTipMessage 在屏幕上显示各通道数值（默认关）
     tipIntervalMs: 1000,              // 刷新间隔（毫秒）
     tipContent: 'channel',            // channel = 各通道强度，both = 总电量+各通道，energy = 只看总电量
     tipSource: 'plan',                // plan = 脚本下发的值，device = 设备回传的值
@@ -719,6 +719,7 @@ function loadConfig() {
         }
     }
     fixPanelSetting();
+    fixTipSetting();
     fixDecaySetting();
     log('设置已读取', JSON.stringify(CONFIG));
 }
@@ -742,6 +743,26 @@ function fixPanelSetting() {
         }
         MOD.sp.putBoolean(key, true);
     } catch (e2) { /* 存档读不了就算了 */ }
+}
+
+/* 一次性：屏幕提示电量以前默认是开的，存档里存着 true，现在默认关掉 */
+function fixTipSetting() {
+    if (!spAvailable()) return;
+    var key = SP_PREFIX + 'tipFix1';
+    var saved = false;
+    try { saved = MOD.sp.contains(SP_PREFIX + 'tipEnabled'); } catch (e0) { saved = false; }
+    if (!saved) return;
+    var done = false;
+    try { done = MOD.sp.getBoolean(key); } catch (e) { done = false; }
+    if (done) return;
+    try {
+        if (CONFIG.tipEnabled === true) {
+            CONFIG.tipEnabled = false;
+            try { MOD.sp.putBoolean(SP_PREFIX + 'tipEnabled', false); } catch (e2) { /* 忽略 */ }
+            chat('[DG-LAB] 「屏幕提示电量」已按新默认关掉（想开就在面板「界面」里打开，或 !dg set 屏幕提示电量 true）');
+        }
+        MOD.sp.putBoolean(key, true);
+    } catch (e3) { /* 存档读不了就算了 */ }
 }
 
 /* 一次性：「复活后回落秒数」老默认是 0，存档里被写成 0，看起来像功能没生效 */
@@ -869,6 +890,7 @@ var S = {
 
 var PLAN_CACHE = { ch: '', bScale: null, bOffset: null, bWave: null, wave: '', plan: null };
 var SETTINGS_BY_GROUP = [];      // 面板用：预先按分组分好，免得每帧重扫 93 项
+var SETTING_BY_KEY = {};         // 按键查设置定义（控件要知道类型）
 
 function buildGroupIndex() {
     SETTINGS_BY_GROUP = [];
@@ -880,6 +902,14 @@ function buildGroupIndex() {
         }
         if (defs.length) SETTINGS_BY_GROUP.push({ name: name, defs: defs });
     }
+    SETTING_BY_KEY = {};
+    for (var k = 0; k < SETTING_DEFS.length; k++) SETTING_BY_KEY[SETTING_DEFS[k].key] = SETTING_DEFS[k];
+}
+
+/* 枚举的当前下标 */
+function enumIndex(def) {
+    for (var i = 0; i < def.values.length; i++) if (def.values[i] === CONFIG[def.key]) return i;
+    return 0;
 }
 
 function channelPlan() {
@@ -1768,8 +1798,8 @@ function tipText() {
 /* 到间隔就刷一次屏幕提示 */
 function tickTip(t) {
     if (!CONFIG.tipEnabled) {
-        S.tipShown = '';
         S.lastTipAt = 0;
+        S.tipShown = '';
         return;
     }
     var gap = clamp(CONFIG.tipIntervalMs, 200, 10000);
@@ -2370,6 +2400,9 @@ function setSetting(key, raw, save, quiet) {
         key === 'pulseLeadMs') {
         S.nextPulseAt = 0;
     }
+    if (key === 'tipEnabled') {
+        try { if (spAvailable()) MOD.sp.putBoolean(SP_PREFIX + 'tipFix1', true); } catch (e) { /* 忽略 */ }
+    }
     if (key === 'respawnDecaySec') {
         try { if (spAvailable()) MOD.sp.putBoolean(SP_PREFIX + 'decayFix1', true); } catch (e) { /* 忽略 */ }
     }
@@ -2612,8 +2645,14 @@ function getAV(key) {
     var g = MOD.ImGui;
     if (!g || !g.AccessValue) return null;
     if (!AV[key]) {
+        var def = SETTING_BY_KEY[key];
         try {
-            AV[key] = new g.AccessValue(CONFIG[key]);
+            if (def && def.type === 'enum') {
+                /* Combo 要的是"第几项"，所以建一个 int 类型的值，不能拿字符串去建 */
+                AV[key] = new g.AccessValue(enumIndex(def), 'int');
+            } else {
+                AV[key] = new g.AccessValue(CONFIG[key]);
+            }
         } catch (e) {
             return null;
         }
@@ -2622,7 +2661,15 @@ function getAV(key) {
 }
 
 function syncAV(key) {
-    if (AV[key] && AV[key].value !== CONFIG[key]) AV[key].value = CONFIG[key];
+    var av = AV[key];
+    if (!av) return;
+    var def = SETTING_BY_KEY[key];
+    if (def && def.type === 'enum') {
+        var idx = enumIndex(def);
+        if (av.value !== idx) av.value = idx;
+        return;
+    }
+    if (av.value !== CONFIG[key]) av.value = CONFIG[key];
 }
 
 var UI = {
@@ -2816,14 +2863,14 @@ function drawNumber(def) {
     /* 引擎连滑条都画不出来（很少见）：退化成文字 + 加减按钮，至少还能调 */
     UI.text(def.cn + '：' + fmtNum(v));
     UI.sameLine();
-    if (UI.button('-##m_' + def.key)) nudgeSetting(def.key, v - step, min, max, isInt);
+    if (UI.button('减##m_' + def.key)) nudgeSetting(def.key, v - step, min, max, isInt);
     UI.sameLine();
-    if (UI.button('+##p_' + def.key)) nudgeSetting(def.key, v + step, min, max, isInt);
+    if (UI.button('加##p_' + def.key)) nudgeSetting(def.key, v + step, min, max, isInt);
     if (big !== step) {
         UI.sameLine();
-        if (UI.button('--##mm_' + def.key)) nudgeSetting(def.key, v - big, min, max, isInt);
+        if (UI.button('大减##mm_' + def.key)) nudgeSetting(def.key, v - big, min, max, isInt);
         UI.sameLine();
-        if (UI.button('++##pp_' + def.key)) nudgeSetting(def.key, v + big, min, max, isInt);
+        if (UI.button('大加##pp_' + def.key)) nudgeSetting(def.key, v + big, min, max, isInt);
     }
 }
 
@@ -2843,43 +2890,33 @@ function nudgeSetting(key, want, min, max, isInt) {
 }
 
 function drawEnum(def) {
-    var av = getAV(def.key);
-    var curIdx = 0;
-    for (var ci = 0; ci < def.values.length; ci++) {
-        if (def.values[ci] === CONFIG[def.key]) curIdx = ci;
-    }
-    /* 左右按钮：不依赖 Combo，任何引擎都能调 */
-    var last = def.values.length - 1;
-    UI.text(def.cn);
-    UI.sameLine();
-    if (UI.button('<##el_' + def.key)) setSetting(def.key, def.values[(curIdx + last) % def.values.length], true, true);
-    UI.sameLine();
-    if (UI.button('>##er_' + def.key)) setSetting(def.key, def.values[(curIdx + 1) % def.values.length], true, true);
-    UI.sameLine();
-    UI.text('= ' + (def.labels && def.labels[curIdx] !== undefined ? def.labels[curIdx] : CONFIG[def.key]));
-    if (!av) return;
-    var idx = curIdx;
-    if (av.value !== idx) av.value = idx;
-    var before = av.value;
+    var curIdx = enumIndex(def);
     var items = (def.labels && def.labels.length === def.values.length) ? def.labels : def.values;
-    var r = UI.combo(def.cn + '##' + def.key, av, items);
-    if (r === null) {
-        UI.text(def.cn + '：' + (items[idx] !== undefined ? items[idx] : CONFIG[def.key]));
-        UI.sameLine();
-        if (UI.button('上一个##' + def.key + 'p')) {
-            var prev = (idx - 1 + def.values.length) % def.values.length;
-            setSetting(def.key, def.values[prev], true, true);
+
+    var av = getAV(def.key);
+    if (av) {
+        syncAV(def.key);
+        var before = av.value;
+        var r = UI.combo(def.cn + '##' + def.key, av, items);
+        if (r !== null) {
+            /* 引擎自己画的选择框（就是那个「上一个 / 下一个」），够用了 */
+            if (av.value !== before) {
+                var picked = def.values[Number(av.value)];
+                if (picked !== undefined) setSetting(def.key, picked, true, true);
+            }
+            return;
         }
-        UI.sameLine();
-        if (UI.button('下一个##' + def.key + 'n')) {
-            var next = (idx + 1) % def.values.length;
-            setSetting(def.key, def.values[next], true, true);
-        }
-        return;
     }
-    if (av.value !== before) {
-        var v = def.values[Number(av.value)];
-        if (v !== undefined) setSetting(def.key, v, true, true);
+
+    /* 没有 Combo 的引擎：中文按钮兜底，一个符号都不用，绝不会变成问号 */
+    UI.text(def.cn + '：' + (items[curIdx] !== undefined ? items[curIdx] : CONFIG[def.key]));
+    UI.sameLine();
+    if (UI.button('上一个##' + def.key + 'p')) {
+        setSetting(def.key, def.values[(curIdx - 1 + def.values.length) % def.values.length], true, true);
+    }
+    UI.sameLine();
+    if (UI.button('下一个##' + def.key + 'n')) {
+        setSetting(def.key, def.values[(curIdx + 1) % def.values.length], true, true);
     }
 }
 
@@ -3043,7 +3080,7 @@ function drawHud() {
             var t = nowMs();
             var st = DG.state === 'paired' ? '已连接' : DG.state === 'waiting' ? '等设备' :
                 DG.state === 'closed' ? '重连中' : DG.state === 'connecting' ? '连接中' : '未连接';
-            UI.text('电量 ' + round1(S.energy) + '／强度 ' + Math.round(S.strength));
+            UI.text('电量 ' + round1(S.energy) + ' / 强度 ' + Math.round(S.strength));
             UI.text('设备 左 ' + DG.device.A + '　右 ' + DG.device.B + '　' + st);
             UI.text('波形 ' + (S.chargeUntil > t ? round1((S.chargeUntil - t) / 1000) + ' 秒' : '无') +
                 '　血量 ' + (S.lastHp === null ? '—' : round1(S.lastHp)));
