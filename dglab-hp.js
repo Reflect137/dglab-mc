@@ -794,6 +794,9 @@ var S = {
     lastPulseAt: 0,       // 上次真正发出波形的时间
     waveOverride: '',     // 随机波形时这一次用的波形
     waveNow: '',          // 轮换当前用的波形（只存在内存里，不写 sp）
+    powerHinted: false,   // 本次世界是否已提示过「总开关/屏蔽输出」
+    deviceZeroSince: 0,   // 设备回报强度一直是 0 的起始时间
+    deviceZeroHinted: false,
     offlineStop: false,   // 连不上太久，已自动停止输出
     waveHits: 0,          // 距离上次轮换累计的受伤次数
     waveSwitchAt: 0,      // 延迟轮换的到点时间（0 = 没有待切换）
@@ -1169,6 +1172,10 @@ var DG = {
                 var appUrl = this.buildPairing(this.myId);
                 logAlways('设备已连接，配对地址', appUrl);
                 notice('设备已连接，当前强度 ' + Math.round(S.strength));
+                if (!S.powerHinted) {
+                    S.powerHinted = true;
+                    notice('感觉不到电的话：APP 里打开「总开关」、关掉「屏蔽输出」');
+                }
                 this.queueStrength(0);
                 this.flushStrength(nowMs(), true);   /* 配对瞬间要立刻生效，不受节流影响 */
             } else if (!data.targetId) {
@@ -1886,6 +1893,24 @@ function engineTick(t, dtMs) {
     var want = Math.round(clamp(S.strength, 0, CONFIG.maxStrength));
     if (want !== DG.sentStrength && want !== DG.pendingStrength) DG.queueStrength(want);
 
+    /* 设备回报强度一直是 0（我们却在发）：多半是 APP 没开总开关 / 开着屏蔽输出 */
+    if (DG.state === 'paired' && want >= 5) {
+        var devMax = Math.max(DG.device.A || 0, DG.device.B || 0);
+        if (devMax <= 0) {
+            if (!S.deviceZeroSince) S.deviceZeroSince = t;
+            else if (t - S.deviceZeroSince > 5000 && !S.deviceZeroHinted) {
+                S.deviceZeroHinted = true;
+                notice('发了 ' + Math.round((t - S.deviceZeroSince) / 1000) + ' 秒，设备回报强度一直是 0：' +
+                    '去 APP 打开「总开关」、关掉「屏蔽输出」（也可能是电极没接好）');
+            }
+        } else {
+            S.deviceZeroSince = 0;
+            S.deviceZeroHinted = false;
+        }
+    } else {
+        S.deviceZeroSince = 0;
+    }
+
     /* 设备强度被手动改高时拉回来（可选） */
     if (CONFIG.keepInSync && DG.state === 'paired' && t - DG.lastSendAt > 1000) {
         var plan = channelPlan();
@@ -2113,7 +2138,6 @@ function connectRelay(manual) {
 }
 
 function dglabReady() {
-    chat('[DG-LAB] 脚本开始加载 v' + SCRIPT_VER + '…');
     try {
         if (!S.inited) init('onReadyEvent');
         else {
@@ -2127,7 +2151,7 @@ function dglabReady() {
     S.lastTotal = null;
     logAlways('已进入世界');
 
-    /* 把加载结果和缺的模块直接说出来 */
+    /* 只在有问题时才说话：缺模块 / 出过错 / 面板关着。正常加载不刷屏。 */
     var miss = [];
     if (!MOD.socket || !MOD.socket.WebSocket) miss.push('socket（连不上中继）');
     if (!MOD.player) miss.push('player（读不到血量）');
@@ -2135,21 +2159,19 @@ function dglabReady() {
     if (!MOD.ImGui) miss.push('ImGui（画不了面板）');
     if (!MOD.sp) miss.push('sp（设置无法保存）');
     keepHooked('进入世界');
-    var line = '[DG-LAB] 已加载 v' + SCRIPT_VER + '，' + SETTING_DEFS.length + ' 项设置';
-    if (miss.length) line += '｜⚠️ 缺少模块：' + miss.join('、');
-    if (ERR_COUNT > 0) line += '｜加载过程中出错 ' + ERR_COUNT + ' 次，输入 !dg errors 查看';
+    var line = '';
+    if (miss.length) line += '⚠️ 缺少模块：' + miss.join('、');
+    if (ERR_COUNT > 0) line += (line ? '｜' : '') + '出过错 ' + ERR_COUNT + ' 次，!dg errors 查看';
+    if (!CONFIG.showPanel) line += (line ? '｜' : '') + '面板关着，聊天栏敲 !dg panel 打开';
+    if (line) chat('[DG-LAB] ' + line);
     if (!CONFIG.showPanel) {
-        line += '｜面板当前是关闭的，聊天栏敲 !dg panel 打开';
         /* 聊天栏容易被刷掉，再往屏幕顶部提示一次 */
         try {
             if (MOD.minecraft && MOD.minecraft.showTipMessage) {
                 MOD.minecraft.showTipMessage('[DG-LAB] 面板关着：聊天栏敲 !dg panel 打开');
             }
         } catch (e) { /* 忽略 */ }
-    } else if (CONFIG.panelCompact) {
-        line += '｜面板是紧凑模式，点「显示全部设置」展开';
     }
-    chat(line);
 }
 
 function dglabLeave() {
@@ -2273,6 +2295,10 @@ function setSetting(key, raw, save, quiet) {
         }
         saveConfig();
     }
+    /* 面板刚被关掉：当场说一句怎么打开，免得下次进世界找不到 */
+    if (key === 'showPanel' && !v) {
+        chat('[DG-LAB] 面板已关闭。想再打开：聊天栏敲 !dg panel');
+    }
     if (!quiet) chat('[DG-LAB] ' + def.cn + ' = ' + v);
     log('设置', key, '=', v);
     return true;
@@ -2385,6 +2411,8 @@ function handleCommand(msg) {
             '｜ImGui签名=' + (UI.sig.begin || 0) + ' 画不出帧=' + (S.panelFailFrames || 0) +
             ' 正常帧=' + (S.panelFrames || 0) + ' UI.ok=' + UI.ok);
         chat('  中继 ' + DG.state + '｜' + DG.url() + '｜id=' + (DG.myId || '-') + '｜app=' + (DG.appId || '-'));
+        chat('  设备回报 A=' + (DG.device.A || 0) + ' B=' + (DG.device.B || 0) +
+            '（发了强度但这里一直是 0 = APP 没开总开关或开着屏蔽）');
         chat('  数值 电量' + round1(S.energy) + ' 强度' + Math.round(S.strength) + ' 通道' + CONFIG.channel +
             ' 血量' + (S.lastHp === null ? '-' : round1(S.lastHp) + '/' + round1(S.lastMaxHp)) +
             ' 总开关' + (CONFIG.enabled ? '开' : '关') + (S.paused ? '(暂停)' : '') +
