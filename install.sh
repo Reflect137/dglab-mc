@@ -28,6 +28,48 @@ warn() { printf '  ⚠️  %s\n' "$*"; }
 die()  { printf '  ❌ %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# 读项目版本号（package.json 里的 version）
+ver_of() {
+    sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$1/package.json" 2>/dev/null | head -1
+}
+
+# 当前这份是什么版本（新 → 有版本号；旧 → 空）
+short_commit() {
+    git -C "$1" rev-parse --short HEAD 2>/dev/null || echo ''
+}
+
+# 检查并更新；直接给出结论：已是最新版 / 更新完成 / 连不上
+update_repo() {
+    local dir="$1" before after vbefore vafter
+    if [ ! -d "$dir/.git" ]; then
+        warn "这个目录不是 git 仓库，没法自动更新（手动下载新版覆盖即可）"
+        return 1
+    fi
+    have git || { warn "没有 git，没法自动更新"; return 1; }
+    before="$(short_commit "$dir")"
+    vbefore="$(ver_of "$dir")"
+    if [ -n "$(git -C "$dir" status --porcelain 2>/dev/null)" ]; then
+        warn "这个目录里有本地改动，更新会把它们覆盖掉"
+    fi
+    say "  查 GitHub 上的最新版…"
+    if ! git -C "$dir" fetch --depth 1 origin main >/dev/null 2>&1; then
+        warn "连不上 GitHub（网络问题？），继续用当前的 v${vbefore:-?}（$before）"
+        return 1
+    fi
+    after="$(git -C "$dir" rev-parse --short FETCH_HEAD 2>/dev/null || echo '')"
+    if [ "$before" = "$after" ]; then
+        ok "已经是最新版 v${vbefore:-?}（$before）"
+        return 0
+    fi
+    if ! git -C "$dir" reset --hard -q FETCH_HEAD 2>/dev/null; then
+        warn "更新失败，继续用 v${vbefore:-?}（$before）"
+        return 1
+    fi
+    vafter="$(ver_of "$dir")"
+    ok "更新完成：v${vbefore:-?}（$before） → v${vafter:-?}（$after）"
+    return 0
+}
+
 usage() {
     cat <<'USAGE'
 DG-LAB × 我的世界 · 安装脚本
@@ -104,6 +146,9 @@ say ""
 say "=== DG-LAB × 我的世界 · 安装程序 ==="
 say "  运行环境 : $PLATFORM"
 say "  安装目录 : $DIR"
+if [ "$IN_REPO" = "1" ] || [ -d "$DIR/.git" ]; then
+    say "  当前版本 : v$(ver_of "$DIR" 2>/dev/null || echo '?')（$(short_commit "$DIR")）"
+fi
 say ""
 
 # ---------------------------------------------------------------- --check
@@ -168,20 +213,16 @@ say "[2/4] 获取项目文件"
 if [ "$IN_REPO" = "1" ]; then
     ok "用的就是当前目录：$DIR"
     if [ "$DO_UPDATE" = "1" ]; then
-        if [ -d "$DIR/.git" ] && have git; then
-            say "  更新…"
-            git -C "$DIR" pull --ff-only && ok "已更新到最新版" || warn "更新失败（离线？本地有改动？），继续用当前版本"
-        else
-            warn "这个目录不是 git 仓库，没法自动更新（手动下载新版覆盖即可）"
-        fi
+        update_repo "$DIR"
+    else
+        say "  想检查有没有新版：bash install.sh --update"
     fi
 elif [ -d "$DIR/.git" ]; then
     if have git; then
         if [ "$DO_UPDATE" = "1" ]; then
-            say "  更新已有仓库…"
-            git -C "$DIR" pull --ff-only && ok "已更新到最新版" || warn "更新失败（离线？），继续用现有版本"
+            update_repo "$DIR"
         else
-            ok "已有仓库：$DIR（要更新加 --update）"
+            ok "已有仓库：$DIR（要检查更新加 --update）"
         fi
     else
         warn "已有仓库但没有 git，跳过更新：$DIR"

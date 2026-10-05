@@ -18,6 +18,17 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { EventEmitter } = require('node:events');
+const nodePath = require('node:path');
+
+/** 版本号取自 package.json（拿不到就返回 ?） */
+function readVersion() {
+    try {
+        const pkg = JSON.parse(fs.readFileSync(nodePath.join(__dirname, '..', 'package.json'), 'utf8'));
+        return pkg.version || '?';
+    } catch {
+        return '?';
+    }
+}
 
 // ---------------------------------------------------------------- 常量
 
@@ -1864,6 +1875,7 @@ const USAGE = `用法: node dglab-relay.js [选项]
   --quiet       不打启动提示（只保留监听那一行）
   --log <file>  把每条收发消息以 JSONL 追加写入文件
   -h, --help    显示本帮助
+  --version     打印版本号后退出
 
 HTTP:
   GET /            服务状态 JSON
@@ -1872,7 +1884,7 @@ HTTP:
   ws://host:port/<targetId>  APP 端（也支持 ?targetId= / ?tid=）`;
 
 function parseArgs(argv) {
-    const opts = { port: DEFAULT_PORT, host: DEFAULT_HOST, verbose: false, quiet: false, logFile: null, help: false };
+    const opts = { port: DEFAULT_PORT, host: DEFAULT_HOST, verbose: false, quiet: false, logFile: null, help: false, version: false };
 
     for (let i = 0; i < argv.length; i += 1) {
         const arg = argv[i];
@@ -1895,6 +1907,8 @@ function parseArgs(argv) {
             opts.logFile = arg.slice('--log='.length);
         } else if (arg === '--help' || arg === '-h') {
             opts.help = true;
+        } else if (arg === '--version') {
+            opts.version = true;
         } else if (arg === '--quiet' || arg === '-q') {
             opts.quiet = true;
         } else if (arg === '--no-verbose') {
@@ -1921,6 +1935,11 @@ if (require.main === module) {
     } catch (err) {
         process.stderr.write(`[relay] ${err.message}\n\n${USAGE}\n`);
         process.exit(2);
+    }
+
+    if (opts.version) {
+        process.stdout.write(`dglab-relay v${readVersion()}\n`);
+        process.exit(0);
     }
 
     if (opts.help) {
