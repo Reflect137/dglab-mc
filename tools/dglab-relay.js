@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-/* dglab-relay.js —— DG-LAB WebSocket V3 中继（纯 Node，零依赖）
+/* dglab-relay.js —— DG-LAB WebSocket V3 中继
  * 用法：node dglab-relay.js [--port 9999] [--host 0.0.0.0] [--verbose] [--quiet] [--log 文件]
  * GET / 和 /__status 返回状态 JSON；控制端可用 ?cid=<id> 固定 clientId。
  * 协议对齐上游 v3-server.ts，自己写了最小 RFC6455 服务端。

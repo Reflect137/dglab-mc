@@ -2105,6 +2105,8 @@ function dglabReady() {
     var line = '[DG-LAB] 已加载 v' + SCRIPT_VER + '，' + SETTING_DEFS.length + ' 项设置';
     if (miss.length) line += '｜⚠️ 缺少模块：' + miss.join('、');
     if (ERR_COUNT > 0) line += '｜加载过程中出错 ' + ERR_COUNT + ' 次，输入 !dg errors 查看';
+    if (!CONFIG.showPanel) line += '｜面板当前是关闭的，聊天栏敲 !dg panel 打开';
+    else if (CONFIG.panelCompact) line += '｜面板是紧凑模式，点「显示全部设置」展开';
     chat(line);
 }
 
@@ -2896,6 +2898,16 @@ try {
 }
 
 /* 事件函数挂到全局（游戏按全局名调用）；同名旧函数已在开头抓进 PREV_HANDLERS */
+/* 找全局对象：老引擎可能没有 globalThis（只有 window / self / global） */
+function findGlobal() {
+    try { if (typeof globalThis !== 'undefined' && globalThis) return globalThis; } catch (e) { /* 下一个 */ }
+    try { if (typeof window !== 'undefined' && window) return window; } catch (e) { /* 下一个 */ }
+    try { if (typeof self !== 'undefined' && self) return self; } catch (e) { /* 下一个 */ }
+    try { if (typeof global !== 'undefined' && global) return global; } catch (e) { /* 下一个 */ }
+    try { return Function('return this')(); } catch (e) { /* 拿不到 */ }
+    return null;
+}
+
 var OUR_HANDLERS = {
     onTickEvent: onTickEvent,
     onEntityBehaviorEvent: onEntityBehaviorEvent,
@@ -2905,19 +2917,20 @@ var OUR_HANDLERS = {
     onImGuiRenderEvent: onImGuiRenderEvent
 };
 
-try {
-    var GLOBAL = (typeof globalThis !== 'undefined') ? globalThis : this;
+var GLOBAL = findGlobal();
+if (GLOBAL) {
     for (var hookName in OUR_HANDLERS) {
         if (OUR_HANDLERS.hasOwnProperty(hookName)) GLOBAL[hookName] = OUR_HANDLERS[hookName];
     }
-} catch (e) {
-    logAlways('挂载全局事件失败: ' + e);
+} else {
+    logAlways('找不到全局对象，事件函数挂不上');
+    try { chat('[DG-LAB] ⚠️ 挂不上游戏事件函数（这个引擎没有全局对象），脚本不会生效'); } catch (e) { /* 忽略 */ }
 }
 
 /* 有的加载器会在本脚本之后把全局事件函数换掉，那样本脚本就再也不跑了
  *（症状：加载完啥都没发生）。定期检查，被换掉就抢回来，对方的实现接进调用链。 */
 function keepHooked(where) {
-    var G = (typeof globalThis !== 'undefined') ? globalThis : null;
+    var G = findGlobal();
     if (!G) return;
     for (var name in OUR_HANDLERS) {
         if (!OUR_HANDLERS.hasOwnProperty(name)) continue;
