@@ -726,18 +726,30 @@ class Relay extends EventEmitter {
         this._startedAt = Date.now();
         this.startHeartbeat();
 
-        console.log(`[relay] listening ws://${this.host}:${this.port}`);
         if (!this.quiet) {
-            console.log(`[relay] 手机内直连地址        : ws://127.0.0.1:${this.port}`);
-    if (this.host === '0.0.0.0' || this.host === '::') {
-        console.log('[relay] 注意：正在监听所有网卡，同网络的设备都能连（无密码）');
-    }
-            console.log(`[relay] 控制端(游戏脚本)连接 : ws://127.0.0.1:${this.port}/?cid=mc-coyote`);
-            console.log(`[relay] DG-LAB APP 连接地址  : ws://127.0.0.1:${this.port}/mc-coyote`);
-            console.log('[relay] Termux 小贴士: 先执行 termux-wake-lock 可避免后台被系统杀掉');
-            console.log('[relay] 状态页: 浏览器打开 http://127.0.0.1:%d/__status', this.port);
+            if (this.verbose) {
+                /* 排查模式：把所有地址都打出来 */
+                console.log(`[relay] listening ws://${this.host}:${this.port}`);
+                console.log(`[relay] 手机内直连地址        : ws://127.0.0.1:${this.port}`);
+                console.log(`[relay] 控制端(游戏脚本)连接 : ws://127.0.0.1:${this.port}/?cid=mc-coyote`);
+                console.log(`[relay] DG-LAB APP 连接地址  : ws://127.0.0.1:${this.port}/mc-coyote`);
+                console.log(`[relay] 状态页: 浏览器打开 http://127.0.0.1:${this.port}/__status`);
+            } else {
+                console.log('');
+                console.log(`=== DG-LAB 中继已启动（端口 ${this.port}）===`);
+                console.log('');
+                console.log('  1) 把 dglab-hp.js 放进游戏的脚本目录，进游戏执行脚本');
+                console.log('  2) 打开 DG-LAB APP → Socket 控制 → 服务器地址填：');
+                console.log(`       ws://127.0.0.1:${this.port}/mc-coyote`);
+                console.log('');
+                console.log('  Ctrl+C 停止。要看详细地址和协议日志，启动时加 --verbose');
+                console.log('');
+            }
+            if (this.host === '0.0.0.0' || this.host === '::') {
+                console.log('[relay] 注意：正在监听所有网卡，同网络的设备都能连（无密码）');
+            }
         }
-        this._log('info', `服务启动 port=${this.port} heartbeat=${this.heartbeatMs}ms idle=${this.idleTimeoutMs}ms`);
+        if (this.verbose) this._log('info', `服务启动 port=${this.port} heartbeat=${this.heartbeatMs}ms idle=${this.idleTimeoutMs}ms`);
 
         return { port: this.port };
     }
@@ -811,7 +823,7 @@ class Relay extends EventEmitter {
                 });
             }
         }, this.heartbeatMs);
-        this._log('info', `心跳启动 interval=${this.heartbeatMs}ms`);
+        this._log('debug', `心跳启动 interval=${this.heartbeatMs}ms`);
     }
 
     // ------------------------------------------------------------ HTTP

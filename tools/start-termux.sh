@@ -53,9 +53,7 @@ if command -v termux-setup-storage >/dev/null 2>&1 && [ ! -d "$HOME/storage" ]; 
     echo "[start] 提示：如果读不到 /sdcard，先在 Termux 里跑一次 termux-setup-storage"
 fi
 
-echo "[start] 项目目录: $ROOT"
-echo "[start] 启动中继，端口 $PORT，监听 $HOST（Ctrl+C 退出）"
-echo
+# 启动横幅由中继自己打印，这里不重复
 
 if [ "$HOST" != "127.0.0.1" ]; then
     echo "[start] 注意：监听 $HOST，同网络的其他设备都能连（无密码）"

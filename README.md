@@ -33,7 +33,7 @@ termux-setup-storage
 
 ## 用
 
-1. 郊狼主机和电极接好，手机开 DG-LAB APP
+1. 郊狼主机和电极接好，手机开 DG-LAB APP（**推荐 3.0 及以上**，Socket 控制是 3.0 才有的功能，旧版没有这个入口：[官方下载](https://www.dungeon-lab.com/app-download.php)）
 2. Termux里输入`dglab`
 3. 把 `dglab-hp.js` 放进游戏的脚本目录，进入游戏并执行脚本
 4. APP 里进 Socket 控制，地址填 `ws://127.0.0.1:9999/mc-coyote`
