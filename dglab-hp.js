@@ -2147,10 +2147,27 @@ function pollVitals(t) {
     S.creativeSince = 0;
 
     if (S.lastTotal === null || S.lastHp === null) {
+        var wasDead = S.deathHandled;
         S.lastHp = v.hp;
         S.lastTotal = v.total;
         S.lastAbsorb = v.absorb;
         log('血量校准', v.hp, '/', v.maxHp, '吸收', v.absorb);
+        /* 死亡时玩家对象会消失，复活后第一次读血就走这里。
+         * 以前这里直接 return，把"复活"这一步吞了 —— 结果电量永远顶在最高。 */
+        if (wasDead && v.hp > 0.01) {
+            S.deathHandled = false;
+            if (CONFIG.respawnGraceSec > 0) {
+                S.respawnGraceUntil = t + Math.round(CONFIG.respawnGraceSec * 1000);
+            }
+            if (CONFIG.respawnDecaySec > 0 && !(S.decayUntil > t) && S.energy > 0.01) {
+                S.decayFrom = S.energy;
+                S.decayStart = t;
+                S.decayUntil = t + Math.round(CONFIG.respawnDecaySec * 1000);
+                S.decayWhy = '复活';
+                noticeRoutine('复活：电量将在 ' + round1(CONFIG.respawnDecaySec) + ' 秒内回落到 0');
+                log('复活回落开始（走血量校准分支）', round1(S.energy), '-> 0');
+            }
+        }
         return;
     }
 
