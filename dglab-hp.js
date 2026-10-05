@@ -865,6 +865,9 @@ var S = {
     lastAddAmount: 0,     // 上次加了多少电
     lastAddAt: 0,         // 上次加电的时间
     skip: { min: 0, paused: 0, zeroHold: 0, grace: 0, lowHp: 0 },   // 这次加电为什么没加上
+    zeroCount: {},        // 每种"电量被清掉"的原因各发生了几次
+    zeroLastWhy: '',      // 最近一次清电的原因
+    zeroLastAt: 0,
     lastTipAt: 0,         // 上次发屏幕提示的时间
     tipShown: '',         // 上次提示的内容
     pendingAdd: 0,        // 「受伤后延迟加电」攒着的电量
@@ -1490,9 +1493,17 @@ function readVitals(p) {
 
 /* ---- 9. 加电引擎 ---- */
 
+/* 电量归零时记一笔，方便查"为什么没回满血电就没了" */
+function markZero(why, t) {
+    S.zeroCount[why] = (S.zeroCount[why] || 0) + 1;
+    S.zeroLastWhy = why;
+    S.zeroLastAt = t || nowMs();
+}
+
 function resetOutput(reason, holdMs) {
     var hold = Number(holdMs) || 0;
     if (hold > 0) S.zeroHoldUntil = nowMs() + clamp(hold, 0, 10000);
+    if (S.energy > 0) markZero(reason || '归零', nowMs());
     S.energy = 0;
     S.strength = 0;
     S.chargeUntil = 0;
@@ -1720,8 +1731,23 @@ function onDamage(dmg, t) {
 
 /* 只有回血才减电量：默认「回满血才清」，没回满就一直电 */
 function onHeal(amount, t, energyBefore) {
-    if (!CONFIG.healReduces) return;
     if (!CONFIG.enabled || S.paused) return;
+
+    /* 满血回落（含复活）跟"回血减电"是两码事：那个开关关了也要回落 */
+    var isFullNow = (S.lastMaxHp > 0 && S.lastHp !== null && S.lastHp >= S.lastMaxHp - 0.01);
+    if (isFullNow && CONFIG.respawnDecaySec > 0 && !(S.decayUntil > t)) {
+        var rf = Math.max(S.energy, Number(energyBefore) || 0);
+        if (rf > 0.01) {
+            S.energy = rf;
+            S.decayFrom = rf;
+            S.decayStart = t;
+            S.decayUntil = t + Math.round(CONFIG.respawnDecaySec * 1000);
+            S.decayWhy = '满血';
+            noticeRoutine('满血：电量将在 ' + round1(CONFIG.respawnDecaySec) + ' 秒内回落到 0');
+            return;
+        }
+    }
+    if (!CONFIG.healReduces) return;
     S.stats.heals++;
     S.comboCount = 0;
 
@@ -1749,6 +1775,7 @@ function onHeal(amount, t, energyBefore) {
             }
         } else if (full) {
             var hadEnergy = S.energy > 0;
+            if (hadEnergy) markZero('回满血（瞬间清）', t);
             S.energy = 0;
             S.waveOverride = '';
             if (CONFIG.instantFall) applyStrengthNow(t);
@@ -1930,6 +1957,7 @@ function engineTick(t, dtMs) {
 
     /* 最低输出电量：低于它就彻底停（防止 1 点残电一直放） */
     if (CONFIG.minOutputEnergy > 0 && !(S.decayUntil > t) && S.energy < CONFIG.minOutputEnergy && S.energy > 0) {
+        markZero('低于最低输出电量', t);
         S.energy = 0;
         S.chargeUntil = 0;
         S.waveOverride = '';
@@ -1938,22 +1966,45 @@ function engineTick(t, dtMs) {
     /* 自然回落：默认关闭（decayPerSec = 0），只有回血才减电量 */
     if (CONFIG.decayPerSec > 0 && S.energy > 0 && t - S.lastDamageAt > CONFIG.holdSec * 1000) {
         S.energy -= CONFIG.decayPerSec * dt;
-        if (S.energy < 0) S.energy = 0;
+        if (S.energy < 0) {
+            if (S.zeroLastWhy !== '自然回落') markZero('自然回落', t);
+            S.energy = 0;
+        }
         S.comboCount = 0;
     }
 
     /* 满血兜底：黄心被打掉时血量没变，等不到回血事件，这里按时间兜底清电 */
-    if (CONFIG.clearWhenFullHp && CONFIG.healReduces && !(S.decayUntil > t) && S.lastHp !== null && S.lastMaxHp > 0) {
+    if ((CONFIG.clearWhenFullHp || CONFIG.respawnDecaySec > 0) && !(S.decayUntil > t) &&
+        !(S.decayUntil > 0 && S.decayUntil <= t) &&          /* 回落刚结束这一帧别再起一段 */
+        S.lastHp !== null && S.lastMaxHp > 0) {
         var isFullHp = (S.lastHp > 0.01 && S.lastHp >= S.lastMaxHp - 0.01);
-        if (isFullHp) {
-            if (!S.fullHpSince) S.fullHpSince = t;
-            if (S.energy > 0 && t - S.fullHpSince >= clamp(CONFIG.fullHpClearDelayMs, 0, 5000)) {
+        if (isFullHp && S.energy > 0.01 && t - S.fullHpSince >= clamp(CONFIG.fullHpClearDelayMs, 0, 5000)) {
+            /* 血量是按间隔读的，可能已经过时：真清之前按"现在"再读一次 */
+            var nowV = readVitals(resolvePlayer());
+            if (nowV && !(nowV.hp > 0.01 && nowV.hp >= nowV.maxHp - 0.01)) {
+                S.lastHp = nowV.hp;
+                S.lastMaxHp = nowV.maxHp;
+                S.fullHpSince = 0;
+                log('满血兜底取消：现在其实是 ' + round1(nowV.hp) + '/' + round1(nowV.maxHp));
+            } else if (CONFIG.respawnDecaySec > 0) {
+                /* 和"回满血"一样走回落曲线，不再瞬间清空 */
+                var fFrom = S.energy;
+                S.decayFrom = fFrom;
+                S.decayStart = t;
+                S.decayUntil = t + Math.round(CONFIG.respawnDecaySec * 1000);
+                S.decayWhy = '满血';
+                noticeRoutine('满血：电量将在 ' + round1(CONFIG.respawnDecaySec) + ' 秒内回落到 0');
+            } else {
+                markZero('满血兜底', t);
                 S.energy = 0;
                 S.waveOverride = '';
                 S.comboCount = 0;
                 if (CONFIG.instantFall) applyStrengthNow(t);
                 noticeRoutine('满血，电量已清');
             }
+        }
+        if (isFullHp) {
+            if (!S.fullHpSince) S.fullHpSince = t;
         } else {
             S.fullHpSince = 0;
         }
@@ -1980,6 +2031,8 @@ function engineTick(t, dtMs) {
     } else if (S.decayUntil) {
         S.decayUntil = 0;
         S.decayFrom = 0;
+        markZero('满血回落结束', t);
+        S.fullHpSince = 0;
         S.energy = 0;              // 收尾：确保真的归 0，不留最后一丁点
         S.waveOverride = '';
         S.comboCount = 0;
@@ -2012,10 +2065,12 @@ function engineTick(t, dtMs) {
                 var lim = Math.max(DG.device.limitA || 0, DG.device.limitB || 0);
                 if (lim <= 0) {
                     notice('发了 ' + Math.round((t - S.deviceZeroSince) / 1000) + ' 秒，强度一直是 0：' +
-                        'APP 上报的通道强度上限是 0，去 APP 把对应通道的上限调上去', true);
+                        'APP 上报的通道强度上限是 0，去 APP 把对应通道的上限调上去；' +
+                        '也可能您的通道选错了（现在用的是 ' + CONFIG.channel + ' 通道）', true);
                 } else {
                     notice('发了 ' + Math.round((t - S.deviceZeroSince) / 1000) + ' 秒，强度一直是 0（APP 上限 ' +
-                        lim + '）：去 APP 打开「总开关」、关掉「屏蔽输出」，或检查电极/通道是否接好', true);
+                        lim + '）：1) 去 APP 打开「总开关」2) 关掉「屏蔽输出」3) 检查电极是否接好；' +
+                        '也可能您的通道选错了（现在用的是 ' + CONFIG.channel + ' 通道）', true);
                 }
             }
         } else {
@@ -2095,6 +2150,17 @@ function pollVitals(t) {
 
     var dmg = S.lastTotal - v.total;
     var heal = v.total - S.lastTotal;
+
+    /* 死亡没被观察到（同一帧死又活）时：电量已被伤害顶到上限、血也回满了，同样开始回落 */
+    if (CONFIG.respawnDecaySec > 0 && !S.deathHandled && !(S.decayUntil > nowMs()) &&
+        v.maxHp > 0 && v.hp >= v.maxHp - 0.01 && S.energy >= energyCapValue() - 0.01 && S.energy > 0.01) {
+        S.decayFrom = S.energy;
+        S.decayStart = t;
+        S.decayUntil = t + Math.round(CONFIG.respawnDecaySec * 1000);
+        S.decayWhy = '满血';
+        noticeRoutine('满血：电量将在 ' + round1(CONFIG.respawnDecaySec) + ' 秒内回落到 0');
+        log('电量已满 + 血量回满 -> 开始回落（没观察到死亡）');
+    }
 
     /* 回血前先把电量记一份：回满血清电时要交给回落曲线，得知道清掉的是多少 */
     var energyBefore = S.energy;
@@ -2544,7 +2610,8 @@ function handleCommand(msg) {
         chat('  中继 ' + DG.state + '｜' + DG.url() + '｜id=' + (DG.myId || '-') + '｜app=' + (DG.appId || '-'));
         chat('  设备回报 A=' + (DG.device.A || 0) + ' B=' + (DG.device.B || 0) +
             ' 上限 A=' + (DG.device.limitA || 0) + ' B=' + (DG.device.limitB || 0) +
-            '（回报一直 0：上限是 0 就先调上限，否则看总开关/屏蔽输出/电极）');
+            '（回报一直 0：上限是 0 就先调上限，否则看总开关/屏蔽输出/电极，也可能通道选错了，当前 ' +
+            CONFIG.channel + ' 通道）');
         chat('  下发强度 上次发出 A=' + (DG.sentStrength < 0 ? '未发过' : DG.sentStrength) +
             '（设备回报若一直是 0，就是 APP 那边没输出，不是脚本没发）');
         chat('  数值 电量' + round1(S.energy) + ' 强度' + Math.round(S.strength) + ' 通道' + CONFIG.channel +
@@ -2558,9 +2625,19 @@ function handleCommand(msg) {
             has.push(wn + (typeof g[wn] === 'function' ? 'ok' : '--'));
         }
         chat('  控件 ' + has.join(' ') + '｜用了 整数=' + (UI.sig.sliderInt || '无') + ' 小数=' + (UI.sig.sliderFloat || '无'));
+        var zc = [];
+        for (var zk in S.zeroCount) {
+            if (S.zeroCount.hasOwnProperty(zk) && S.zeroCount[zk] > 0) zc.push(zk + 'x' + S.zeroCount[zk]);
+        }
+        chat('  清电记录 ' + (zc.length ? zc.join(' ｜ ') : '无') +
+            (S.zeroLastWhy ? '（最近一次：' + S.zeroLastWhy + '，' +
+                Math.round((nowMs() - S.zeroLastAt) / 1000) + ' 秒前）' : ''));
         chat('  忽略的加电 伤害太小' + S.skip.min + ' ｜ 归零静默' + S.skip.zeroHold +
             ' ｜ 复活保护' + S.skip.grace + ' ｜ 低于停止线' + S.skip.lowHp + ' ｜ 暂停关闭' + S.skip.paused);
         var decayLeft = S.decayUntil > nowMs() ? round1((S.decayUntil - nowMs()) / 1000) + ' 秒' : '无';
+        chat('  死亡/复活 死亡标记=' + (S.deathHandled ? '在' : '无') + ' ｜ 回落来源=' + (S.decayWhy || '-') +
+            ' 起点=' + round1(S.decayFrom) + ' ｜ 回血减电=' + (CONFIG.healReduces ? '开' : '关') +
+            ' 满血自动清=' + (CONFIG.clearWhenFullHp ? '开' : '关'));
         chat('  满血回落 设定' + round1(CONFIG.respawnDecaySec) + ' 秒 ｜ 当前' + decayLeft +
             ' ｜ 最小伤害' + CONFIG.minDamage + ' ｜ 归零静默' + CONFIG.manualZeroHoldMs + 'ms' +
             ' ｜ 延迟加电' + CONFIG.startDelaySec + 's ｜ 停手线' + CONFIG.stopBelowHp);
