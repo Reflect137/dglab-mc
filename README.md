@@ -34,6 +34,8 @@ bash ~/dglab-mc/tools/get-game-script.sh
 
 ## 更新
 
+改动都记在 [CHANGELOG.md](CHANGELOG.md) 里。
+
 把「装」那一行**再粘一次**就是更新，或者用这条短的：
 
 ```bash
