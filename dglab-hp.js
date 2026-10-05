@@ -3073,10 +3073,33 @@ function drawEnum(def) {
         var before = av.value;
         var r = UI.combo(def.cn + '##' + def.key, av, items);
         if (r !== null) {
-            /* 引擎自己画的选择框（就是那个「上一个 / 下一个」），够用了 */
+            /* 引擎自己画的选择框（就是那个「上一个 / 下一个」），够用了。
+             * 但有的引擎往里写的是"文字"而不是"第几项"，所以三种写法都认。 */
+            var comboMismatch = false;
             if (av.value !== before) {
                 var picked = def.values[Number(av.value)];
-                if (picked !== undefined) setSetting(def.key, picked, true, true);
+                if (picked === undefined && typeof av.value === 'string') {
+                    var li = items.indexOf(av.value);
+                    if (li >= 0) picked = def.values[li];
+                    if (picked === undefined) {
+                        var vi = def.values.indexOf(av.value);
+                        if (vi >= 0) picked = def.values[vi];
+                    }
+                }
+                if (picked !== undefined) {
+                    setSetting(def.key, picked, true, true);
+                } else {
+                    /* 给了个不认识的值：把控件拉回真实值，别让面板显示的和存的不一样 */
+                    log('选择框给了不认识的值: ' + av.value + '（' + def.key + '）');
+                    comboMismatch = true;
+                    av.value = enumIndex(def);
+                }
+            }
+            /* 显示的和实际存的不一致时，直接说清楚（不然玩家会以为设置没生效） */
+            if (comboMismatch || def.values[Number(av.value)] !== CONFIG[def.key]) {
+                UI.sameLine();
+                UI.text('!! 选择框没跟上，实际是 ' + items[curIdx]);
+                av.value = enumIndex(def);
             }
             return;
         }
